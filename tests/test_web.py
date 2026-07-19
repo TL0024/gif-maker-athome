@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import io
+import re
+import threading
+import time
 from pathlib import Path
 
 from PIL import Image
 
 from gifmaker import create_app
+from gifmaker.media import ImportProgress
 from gifmaker.web import default_data_root
 
 
@@ -36,6 +40,103 @@ def test_local_api_requires_page_token(tmp_path: Path) -> None:
     assert response.status_code == 403
 
 
+def test_last_browser_tab_requests_shutdown_but_refresh_keeps_server_alive(tmp_path: Path) -> None:
+    shutdown_requested = threading.Event()
+    app = create_app(
+        tmp_path / "data",
+        testing=True,
+        shutdown_callback=shutdown_requested.set,
+        shutdown_delay=0.1,
+    )
+    token = app.extensions["gifmaker_athome_token"]
+
+    with app.test_client() as client:
+        first_page = client.get("/")
+        first_match = re.search(rb'name="gifmaker-athome-browser-session" content="([^"]+)"', first_page.data)
+        assert first_match is not None
+        first_session = first_match.group(1).decode()
+        closed = client.post(
+            "/api/browser-session/close",
+            json={"session_id": first_session, "token": token},
+        )
+        assert closed.status_code == 202
+
+        refreshed_page = client.get("/")
+        refreshed_match = re.search(
+            rb'name="gifmaker-athome-browser-session" content="([^"]+)"',
+            refreshed_page.data,
+        )
+        assert refreshed_match is not None
+        refreshed_session = refreshed_match.group(1).decode()
+        assert refreshed_session != first_session
+        time.sleep(0.15)
+        assert not shutdown_requested.is_set()
+
+        closed = client.post(
+            "/api/browser-session/close",
+            json={"session_id": refreshed_session, "token": token},
+        )
+        assert closed.status_code == 202
+        assert shutdown_requested.wait(0.5)
+
+
+def test_link_import_job_reports_download_progress_and_returns_asset(tmp_path: Path, monkeypatch) -> None:
+    progress_reported = threading.Event()
+    finish_import = threading.Event()
+
+    def fake_import_media_url(url, store, progress_callback=None):
+        assert url == "https://example.com/video.mp4"
+        assert progress_callback is not None
+        progress_callback(
+            ImportProgress(
+                stage="downloading",
+                downloaded_bytes=512,
+                total_bytes=1024,
+                speed_bytes_per_second=256,
+                eta_seconds=2,
+                detail="Downloading media from the source…",
+            )
+        )
+        progress_reported.set()
+        assert finish_import.wait(2)
+        destination = store.allocate_import_path("linked.gif")
+        destination.write_bytes(animated_gif_bytes())
+        return store.register(destination, "Linked animation.gif")
+
+    monkeypatch.setattr("gifmaker.web.import_media_url", fake_import_media_url)
+    app = create_app(tmp_path / "data", testing=True)
+    headers = {"X-GIFmakerAthome-Token": app.extensions["gifmaker_athome_token"]}
+    with app.test_client() as client:
+        started = client.post(
+            "/api/import",
+            json={"url": "https://example.com/video.mp4"},
+            headers=headers,
+        )
+        assert started.status_code == 202
+        job_id = started.get_json()["job"]["id"]
+        assert progress_reported.wait(0.5)
+
+        progress = client.get(f"/api/import/{job_id}").get_json()["job"]
+        assert progress["status"] == "running"
+        assert progress["stage"] == "downloading"
+        assert progress["downloaded_bytes"] == 512
+        assert progress["total_bytes"] == 1024
+        assert progress["eta_seconds"] == 2
+
+        finish_import.set()
+        deadline = time.monotonic() + 2
+        completed = None
+        while time.monotonic() < deadline:
+            completed = client.get(f"/api/import/{job_id}").get_json()
+            if completed["job"]["status"] == "complete":
+                break
+            time.sleep(0.01)
+        assert completed is not None
+        assert completed["job"]["status"] == "complete"
+        assert completed["asset"]["name"] == "Linked animation.gif"
+        assert completed["asset"]["kind"] == "image"
+
+
 def test_upload_and_media_delivery(tmp_path: Path) -> None:
     app = create_app(tmp_path / "data", testing=True)
     token = app.extensions["gifmaker_athome_token"]
@@ -64,11 +165,14 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         assert b'id="openFrameEditorButton"' in page.data
         assert b'id="frameEditorPanel"' in page.data
         assert b'id="clearCacheButton"' in page.data
+        assert b'id="loadingProgress"' in page.data
         script = (Path(__file__).resolve().parents[1] / "static" / "js" / "app.js").read_text(encoding="utf-8")
         assert "Revert to forward only" in script
         assert 'addEventListener("dragstart"' in script
         assert "Compile edited" in script
         assert "data-delete-frame" in script
+        assert "Downloading linked media" in script
+        assert "navigator.sendBeacon" in script
         assert b'class="chip active" data-aspect="original"' in page.data
         assert b'rel="icon"' in page.data
         assert 'applyCropAspect("original");' in script

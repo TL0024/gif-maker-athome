@@ -11,8 +11,10 @@ from gifmaker.media import (
     MAX_FRAME_EDITOR_FRAMES,
     ExportOptions,
     FrameExportOptions,
+    ImportProgress,
     MediaError,
     MediaStore,
+    _download_direct,
     _run_ffmpeg,
     build_filter_graph,
     ffmpeg_executable,
@@ -24,6 +26,39 @@ def test_ffmpeg_runner_rejects_a_different_executable(monkeypatch: pytest.Monkey
     monkeypatch.setattr("gifmaker.media.ffmpeg_executable", lambda: "trusted-ffmpeg.exe")
     with pytest.raises(MediaError, match="trusted FFmpeg"):
         _run_ffmpeg(["different-program.exe", "-version"], 1)
+
+
+def test_direct_download_reports_byte_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResponse:
+        url = "https://example.com/animation.gif"
+
+        def __init__(self) -> None:
+            self.headers = {"Content-Length": "6", "Content-Type": "image/gif"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_content(self, chunk_size: int):
+            assert chunk_size == 1024 * 1024
+            yield b"GIF"
+            yield b"89a"
+
+    monkeypatch.setattr("gifmaker.media.requests.get", lambda *_args, **_kwargs: FakeResponse())
+    monkeypatch.setattr("gifmaker.media.validate_public_url", lambda value: value)
+    reports: list[ImportProgress] = []
+
+    downloaded = _download_direct("https://example.com/animation.gif", tmp_path, reports.append)
+
+    assert downloaded.read_bytes() == b"GIF89a"
+    assert [report.stage for report in reports] == ["downloading", "downloading", "downloading", "processing"]
+    assert reports[-2].downloaded_bytes == 6
+    assert reports[-2].total_bytes == 6
 
 
 def make_animated_gif(path: Path, size: tuple[int, int] = (80, 60)) -> None:

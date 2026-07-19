@@ -13,7 +13,7 @@ The easiest option is the ready-to-run Windows executable:
 1. Open the [latest release](https://github.com/TL0024/gif-maker-athome/releases/latest).
 2. Download `GIFmakerAthome.exe`.
 3. Run the executable. It opens GIFmakerAthome in your default browser.
-4. Keep the command window open while editing. Close it or press `Ctrl+C` to stop the application.
+4. Keep the app tab open while editing. Closing the last GIFmakerAthome tab also closes the local server and command window. You can still press `Ctrl+C` in the command window to stop it manually.
 
 The executable includes the application and media tools; Python is not required.
 Each release also includes `SHA256SUMS.txt`. To verify the download in PowerShell, run `Get-FileHash .\GIFmakerAthome.exe -Algorithm SHA256` and compare the result with that file.
@@ -23,7 +23,7 @@ Each release also includes `SHA256SUMS.txt`. To verify the download in PowerShel
 1. Install Python 3.11 or newer.
 2. Double-click `install.bat` once. This creates `.venv` and installs the required packages, including a bundled FFmpeg executable.
 3. Double-click `start.bat`.
-4. Keep the command window open while editing. Close it or press `Ctrl+C` to stop the application.
+4. Keep the app tab open while editing. Closing the last GIFmakerAthome tab stops the local server and closes the command window. A browser refresh is safe because the server allows the refreshed page to reconnect before shutting down.
 
 After setup, local-file editing works offline. URL importing requires an internet connection. To update the installed dependencies and compatible-site support, run:
 
@@ -34,7 +34,7 @@ After setup, local-file editing works offline. URL importing requires an interne
 ## Features
 
 - Upload MP4, MOV, WebM, MKV, AVI, GIF, and animated WebP files.
-- Import supported media URLs, including direct media links and compatible websites.
+- Import supported media URLs, including direct media links and compatible websites, with live extraction and download progress.
 - Start every import with the complete original frame selected; optional free, original, 1:1, 16:9, and 9:16 crop controls remain available.
 - Drag or resize the crop frame directly over the media preview.
 - Keep a selected time range or remove a selected section from the middle.
@@ -51,6 +51,7 @@ After setup, local-file editing works offline. URL importing requires an interne
 ## Editing workflow
 
 1. Upload a file or select **Paste a link** and import supported media.
+   URL imports show their extraction stage first, then downloaded bytes, percentage, transfer speed, and estimated time when the source provides that information.
 2. The crop initially covers the complete source. Drag the crop frame or choose an aspect preset if you want a smaller region.
 3. Set the start and end controls. **Keep selected range** exports that interval; **Remove selected middle** joins the sections before and after it.
 4. Choose GIF, animated WebP, or WebM. WebM, 30 FPS, quality 40, original crop size, and no file-size cap are the defaults.
@@ -88,6 +89,7 @@ For Telegram video stickers, select WebM, keep the animation at 30 FPS or lower 
 
 - The server listens only on `127.0.0.1` using a randomly selected free port.
 - Mutating API requests require a new per-run token.
+- Each loaded app page has a per-run browser-session identifier. Closing the last app tab requests server shutdown; a short grace period prevents an ordinary refresh from stopping the process.
 - The source version stores temporary session data in `.gifmaker-athome-data/`.
 - The executable stores temporary session data in `%LOCALAPPDATA%\GIFmakerAthome\cache`.
 - Startup recreates the temporary imports, exports, previews, and frame folders. Download anything you want to keep before restarting.
@@ -109,7 +111,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-The test suite covers local API protection, startup and manual cleanup, upload and download handling, crop and resize filters, time-range removal, GIF palette generation and optional compression, animated WebP, VP9 WebM, output-size limits, metadata and audio removal, frame extraction and editing, hold timing, and forward/reverse loop generation.
+The test suite covers local API protection, browser-tab shutdown and refresh handling, URL-download progress, startup and manual cleanup, upload and download handling, crop and resize filters, time-range removal, GIF palette generation and optional compression, animated WebP, VP9 WebM, output-size limits, metadata and audio removal, frame extraction and editing, hold timing, and forward/reverse loop generation.
 
 Run the security checks with:
 
@@ -130,7 +132,7 @@ The command is the same quality gate used by release builds and CI. It must comp
 
 GitHub Actions separates those checks into independently enforceable jobs and adds PSScriptAnalyzer, pull-request dependency review, CodeQL analysis for Python and JavaScript, tests on Python 3.11 and 3.13, and a clean PyInstaller build. Third-party actions are pinned to immutable commits, ordinary workflows have read-only repository access, checkout credentials are not persisted, and every job has a time limit. Dependabot proposes grouped Python and Actions updates each week.
 
-The `main` branch requires pull requests and successful quality checks. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design, [docs/CI.md](docs/CI.md) for every automated gate, [docs/RELEASING.md](docs/RELEASING.md) for the release process, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+The `main` branch requires pull requests and successful quality checks. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design, [docs/CI.md](docs/CI.md) for every automated gate, [docs/RELEASING.md](docs/RELEASING.md) for the release process, [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) for dependency credits, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 The optional live media-URL smoke test is separate because it uses the network. Supply a URL that you are authorized to retrieve:
 
@@ -163,3 +165,5 @@ The script installs the development tools into `.venv`, runs the security checks
 ## License and media rights
 
 GIFmakerAthome does not grant rights to third-party media. Import and export only material you may lawfully access and use; the person operating GIFmakerAthome is responsible for the resulting files and their distribution.
+
+GIFmakerAthome is built with open-source libraries and the FFmpeg executable. The maintainers gratefully acknowledge those projects and their contributors in [Third-party credits and licenses](docs/THIRD_PARTY.md). Their names and license terms remain the property of their respective projects; inclusion here does not imply endorsement.
