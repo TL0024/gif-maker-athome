@@ -2,10 +2,13 @@
   "use strict";
 
   const token = document.querySelector('meta[name="gifmaker-athome-token"]').content;
+  const browserSessionId = document.querySelector('meta[name="gifmaker-athome-browser-session"]').content;
   const $ = (id) => document.getElementById(id);
   const elements = {
     hero: $("heroSection"), importPanel: $("importPanel"), loading: $("loadingPanel"),
-    loadingTitle: $("loadingTitle"), loadingDetail: $("loadingDetail"), editor: $("editor"),
+    loadingTitle: $("loadingTitle"), loadingDetail: $("loadingDetail"),
+    loadingProgress: $("loadingProgress"), loadingProgressBar: $("loadingProgressBar"),
+    loadingProgressText: $("loadingProgressText"), editor: $("editor"),
     result: $("resultPanel"), fileInput: $("fileInput"), dropZone: $("dropZone"),
     linkInput: $("linkInput"), importLinkButton: $("importLinkButton"), mediaName: $("mediaName"),
     mediaMeta: $("mediaMeta"), stage: $("mediaStage"), video: $("videoPreview"),
@@ -88,6 +91,11 @@
     elements.loadingTitle.textContent = title;
     elements.loadingDetail.textContent = detail;
     elements.loading.hidden = !active;
+    elements.loadingProgress.hidden = true;
+    elements.loadingProgress.classList.remove("indeterminate");
+    elements.loadingProgress.removeAttribute("aria-valuenow");
+    elements.loadingProgressBar.style.width = "0";
+    elements.loadingProgressText.textContent = "";
     if (active) {
       elements.clearCacheButton.disabled = true;
       elements.hero.hidden = true;
@@ -95,6 +103,40 @@
       elements.editor.hidden = true;
       elements.result.hidden = true;
     }
+  }
+
+  function updateImportProgress(job) {
+    const downloaded = Number(job.downloaded_bytes) || 0;
+    const total = Number(job.total_bytes) || 0;
+    const speed = Number(job.speed_bytes_per_second) || 0;
+    const eta = job.eta_seconds == null ? null : Number(job.eta_seconds);
+    const hasTotal = total > 0;
+    elements.loadingProgress.hidden = false;
+    elements.loadingProgress.classList.toggle("indeterminate", !hasTotal);
+
+    if (job.stage === "downloading") elements.loadingTitle.textContent = "Downloading linked media…";
+    else if (job.stage === "processing") elements.loadingTitle.textContent = "Preparing linked media…";
+    else elements.loadingTitle.textContent = "Extracting linked media…";
+    elements.loadingDetail.textContent = job.detail || "This is the only step that needs an internet connection.";
+
+    const parts = [];
+    if (hasTotal) {
+      const percent = Math.min(100, Math.max(0, (downloaded / total) * 100));
+      elements.loadingProgressBar.style.width = `${percent.toFixed(1)}%`;
+      elements.loadingProgress.setAttribute("aria-valuenow", String(Math.round(percent)));
+      parts.push(`${Math.round(percent)}%`, `${readableBytes(downloaded)} of ${readableBytes(total)}`);
+    } else {
+      elements.loadingProgressBar.style.width = "";
+      elements.loadingProgress.removeAttribute("aria-valuenow");
+      if (downloaded > 0) parts.push(`${readableBytes(downloaded)} downloaded`);
+    }
+    if (speed > 0) parts.push(`${readableBytes(speed)}/s`);
+    if (eta !== null && Number.isFinite(eta) && eta >= 0) parts.push(`${formatClock(eta)} remaining`);
+    elements.loadingProgressText.textContent = parts.join(" · ");
+  }
+
+  function delay(milliseconds) {
+    return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
   }
 
   function restoreImporter() {
@@ -476,8 +518,17 @@
     const url = elements.linkInput.value.trim();
     if (!url) { showToast("Paste a supported media URL first."); return; }
     setLoading(true, "Extracting linked media…", "This is the only step that needs an internet connection.");
+    updateImportProgress({ stage: "extracting", detail: "Finding downloadable media…" });
     try {
-      const data = await api("/api/import", { method: "POST", body: JSON.stringify({ url }) });
+      const started = await api("/api/import", { method: "POST", body: JSON.stringify({ url }) });
+      let data = started;
+      while (data.job.status === "running") {
+        updateImportProgress(data.job);
+        await delay(250);
+        data = await api(`/api/import/${data.job.id}`);
+      }
+      updateImportProgress(data.job);
+      if (data.job.status === "failed") throw new Error(data.job.error || "The linked media could not be imported.");
       configureMedia(data.asset);
     } catch (error) {
       restoreImporter();
@@ -985,6 +1036,22 @@
   elements.dropZone.addEventListener("drop", (event) => uploadFile(event.dataTransfer.files[0]));
   elements.importLinkButton.addEventListener("click", importLink);
   elements.linkInput.addEventListener("keydown", (event) => { if (event.key === "Enter") importLink(); });
+
+  window.addEventListener("pagehide", () => {
+    const body = JSON.stringify({ session_id: browserSessionId, token });
+    const queued = navigator.sendBeacon(
+      "/api/browser-session/close",
+      new Blob([body], { type: "application/json" })
+    );
+    if (!queued) {
+      fetch("/api/browser-session/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-GIFmakerAthome-Token": token },
+        body,
+        keepalive: true
+      }).catch(() => {});
+    }
+  });
 
   elements.startRange.addEventListener("input", () => setTimes(elements.startRange.value, elements.endRange.value, "start"));
   elements.endRange.addEventListener("input", () => setTimes(elements.startRange.value, elements.endRange.value, "end"));

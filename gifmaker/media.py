@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.parse
 import uuid
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -30,6 +31,47 @@ if TYPE_CHECKING:
 
 class MediaError(RuntimeError):
     """A user-facing media import or conversion error."""
+
+
+@dataclass(frozen=True)
+class ImportProgress:
+    """Progress reported while a remote media URL is resolved and downloaded."""
+
+    stage: str
+    downloaded_bytes: int = 0
+    total_bytes: int | None = None
+    speed_bytes_per_second: float | None = None
+    eta_seconds: int | None = None
+    detail: str = ""
+
+    def as_api_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+ImportProgressCallback = Callable[[ImportProgress], None]
+
+
+def _report_import_progress(
+    callback: ImportProgressCallback | None,
+    stage: str,
+    *,
+    downloaded_bytes: int = 0,
+    total_bytes: int | None = None,
+    speed_bytes_per_second: float | None = None,
+    eta_seconds: int | None = None,
+    detail: str = "",
+) -> None:
+    if callback is not None:
+        callback(
+            ImportProgress(
+                stage=stage,
+                downloaded_bytes=max(0, downloaded_bytes),
+                total_bytes=total_bytes if total_bytes and total_bytes > 0 else None,
+                speed_bytes_per_second=speed_bytes_per_second,
+                eta_seconds=eta_seconds,
+                detail=detail,
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -227,23 +269,21 @@ def _run_ffmpeg(command: list[str], timeout: int) -> subprocess.CompletedProcess
 
 def probe_media(path: Path) -> MediaInfo:
     """Read dimensions and duration without modifying the source."""
-    try:
-        with Image.open(path) as image:
-            if getattr(image, "is_animated", False) or image.format in {"GIF", "WEBP"}:
-                duration_ms = 0
-                frames = getattr(image, "n_frames", 1)
-                for index in range(frames):
-                    image.seek(index)
-                    duration_ms += int(image.info.get("duration", 100))
-                return MediaInfo(
-                    width=image.width,
-                    height=image.height,
-                    duration=max(duration_ms / 1000, 0.1),
-                    kind="image",
-                    mime=Image.MIME.get(image.format or "", "image/gif"),
-                )
-    except (OSError, ValueError):
-        pass
+    # A source that Pillow cannot identify as animated falls through to FFmpeg probing.
+    with suppress(OSError, ValueError), Image.open(path) as image:
+        if getattr(image, "is_animated", False) or image.format in {"GIF", "WEBP"}:
+            duration_ms = 0
+            frames = getattr(image, "n_frames", 1)
+            for index in range(frames):
+                image.seek(index)
+                duration_ms += int(image.info.get("duration", 100))
+            return MediaInfo(
+                width=image.width,
+                height=image.height,
+                duration=max(duration_ms / 1000, 0.1),
+                kind="image",
+                mime=Image.MIME.get(image.format or "", "image/gif"),
+            )
 
     try:
         import imageio_ffmpeg
@@ -1106,7 +1146,12 @@ def _suffix_for_response(response: requests.Response, url: str) -> str:
     return known.get(content_type, mimetypes.guess_extension(content_type) or ".bin")
 
 
-def _download_direct(url: str, destination_dir: Path) -> Path:
+def _download_direct(
+    url: str,
+    destination_dir: Path,
+    progress_callback: ImportProgressCallback | None = None,
+) -> Path:
+    destination: Path | None = None
     try:
         with requests.get(
             url,
@@ -1126,6 +1171,12 @@ def _download_direct(url: str, destination_dir: Path) -> Path:
             suffix = _suffix_for_response(response, response.url)
             destination = destination_dir / f"{uuid.uuid4().hex}{suffix}"
             downloaded = 0
+            _report_import_progress(
+                progress_callback,
+                "downloading",
+                total_bytes=length,
+                detail="Downloading media from the source…",
+            )
             with destination.open("wb") as output:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if not chunk:
@@ -1134,9 +1185,29 @@ def _download_direct(url: str, destination_dir: Path) -> Path:
                     if downloaded > _MAX_DOWNLOAD_BYTES:
                         raise MediaError("The linked media is larger than the 2 GB import limit.")
                     output.write(chunk)
+                    _report_import_progress(
+                        progress_callback,
+                        "downloading",
+                        downloaded_bytes=downloaded,
+                        total_bytes=length,
+                        detail="Downloading media from the source…",
+                    )
+            _report_import_progress(
+                progress_callback,
+                "processing",
+                downloaded_bytes=downloaded,
+                total_bytes=length,
+                detail="Checking the downloaded media…",
+            )
             return destination
     except requests.RequestException as exc:
+        if destination is not None:
+            destination.unlink(missing_ok=True)
         raise MediaError(f"The media link could not be downloaded: {exc}") from exc
+    except Exception:
+        if destination is not None:
+            destination.unlink(missing_ok=True)
+        raise
 
 
 def _embedded_media_url(page_url: str) -> str | None:
@@ -1169,7 +1240,11 @@ def _embedded_media_url(page_url: str) -> str | None:
     return None
 
 
-def _download_with_ytdlp(url: str, destination_dir: Path) -> tuple[Path, str]:
+def _download_with_ytdlp(
+    url: str,
+    destination_dir: Path,
+    progress_callback: ImportProgressCallback | None = None,
+) -> tuple[Path, str]:
     try:
         from yt_dlp import YoutubeDL
         from yt_dlp.utils import DownloadError
@@ -1178,6 +1253,33 @@ def _download_with_ytdlp(url: str, destination_dir: Path) -> tuple[Path, str]:
 
     prefix = uuid.uuid4().hex
     template = str(destination_dir / f"{prefix}.%(ext)s")
+
+    def report_ytdlp_progress(data: Mapping[str, Any]) -> None:
+        status = str(data.get("status") or "")
+        if status == "downloading":
+            downloaded = int(data.get("downloaded_bytes") or 0)
+            total_value = data.get("total_bytes") or data.get("total_bytes_estimate")
+            total = int(total_value) if total_value else None
+            speed_value = data.get("speed")
+            eta_value = data.get("eta")
+            _report_import_progress(
+                progress_callback,
+                "downloading",
+                downloaded_bytes=downloaded,
+                total_bytes=total,
+                speed_bytes_per_second=float(speed_value) if speed_value else None,
+                eta_seconds=int(eta_value) if eta_value is not None else None,
+                detail="Downloading media from the source…",
+            )
+        elif status == "finished":
+            _report_import_progress(
+                progress_callback,
+                "processing",
+                downloaded_bytes=int(data.get("downloaded_bytes") or 0),
+                total_bytes=int(data.get("total_bytes") or 0) or None,
+                detail="Preparing the downloaded media…",
+            )
+
     options: _Params = {
         "format": "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best",
         "outtmpl": template,
@@ -1188,6 +1290,7 @@ def _download_with_ytdlp(url: str, destination_dir: Path) -> tuple[Path, str]:
         "retries": 3,
         "fragment_retries": 3,
         "ffmpeg_location": str(Path(ffmpeg_executable()).parent),
+        "progress_hooks": [report_ytdlp_progress],
     }
     try:
         with YoutubeDL(options) as downloader:
@@ -1204,12 +1307,17 @@ def _download_with_ytdlp(url: str, destination_dir: Path) -> tuple[Path, str]:
     return max(candidates, key=lambda path: path.stat().st_size), title
 
 
-def import_media_url(url: str, store: MediaStore) -> MediaAsset:
+def import_media_url(
+    url: str,
+    store: MediaStore,
+    progress_callback: ImportProgressCallback | None = None,
+) -> MediaAsset:
+    _report_import_progress(progress_callback, "extracting", detail="Finding downloadable media…")
     clean_url = validate_public_url(url)
     parsed = urllib.parse.urlsplit(clean_url)
     suffix = Path(parsed.path).suffix.lower()
     if suffix in _DIRECT_EXTENSIONS:
-        path = _download_direct(clean_url, store.import_dir)
+        path = _download_direct(clean_url, store.import_dir, progress_callback)
         return store.register(path, Path(parsed.path).name or "linked-media")
 
     extraction_errors: list[str] = []
@@ -1218,13 +1326,13 @@ def import_media_url(url: str, store: MediaStore) -> MediaAsset:
         if embedded:
             try:
                 embedded = validate_public_url(embedded)
-                path = _download_direct(embedded, store.import_dir)
+                path = _download_direct(embedded, store.import_dir, progress_callback)
                 return store.register(path, Path(urllib.parse.urlsplit(embedded).path).name or "linked-media")
             except MediaError as exc:
                 extraction_errors.append(str(exc))
 
     try:
-        path, title = _download_with_ytdlp(clean_url, store.import_dir)
+        path, title = _download_with_ytdlp(clean_url, store.import_dir, progress_callback)
         return store.register(path, f"{title}{path.suffix}")
     except MediaError as exc:
         extraction_errors.append(str(exc))
@@ -1233,7 +1341,7 @@ def import_media_url(url: str, store: MediaStore) -> MediaAsset:
     if embedded:
         try:
             embedded = validate_public_url(embedded)
-            path = _download_direct(embedded, store.import_dir)
+            path = _download_direct(embedded, store.import_dir, progress_callback)
             return store.register(path, Path(urllib.parse.urlsplit(embedded).path).name or "linked-media")
         except MediaError as exc:
             extraction_errors.append(str(exc))

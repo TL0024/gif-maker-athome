@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0d1017">
   <meta name="gifmaker-athome-token" content="{{ request_token }}">
+  <meta name="gifmaker-athome-browser-session" content="{{ browser_session_id }}">
   <title>GIFmakerAthome · Local video to GIF, WebP, and WebM</title>
   <link rel="icon" href="{{ url_for('static', filename='icons/gifmaker-athome.ico') }}" sizes="any">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
@@ -63,7 +64,14 @@
 
     <section class="loading-panel" id="loadingPanel" hidden aria-live="polite">
       <div class="spinner"><span></span></div>
-      <div><strong id="loadingTitle">Importing media…</strong><p id="loadingDetail">Long or high-resolution videos can take a moment.</p></div>
+      <div class="loading-copy">
+        <strong id="loadingTitle">Importing media…</strong>
+        <p id="loadingDetail">Long or high-resolution videos can take a moment.</p>
+        <div class="loading-progress" id="loadingProgress" role="progressbar" aria-label="Download progress" hidden>
+          <span id="loadingProgressBar"></span>
+        </div>
+        <small id="loadingProgressText"></small>
+      </div>
     </section>
 
     <section class="editor" id="editor" hidden>
