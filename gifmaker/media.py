@@ -269,23 +269,21 @@ def _run_ffmpeg(command: list[str], timeout: int) -> subprocess.CompletedProcess
 
 def probe_media(path: Path) -> MediaInfo:
     """Read dimensions and duration without modifying the source."""
-    try:
-        with Image.open(path) as image:
-            if getattr(image, "is_animated", False) or image.format in {"GIF", "WEBP"}:
-                duration_ms = 0
-                frames = getattr(image, "n_frames", 1)
-                for index in range(frames):
-                    image.seek(index)
-                    duration_ms += int(image.info.get("duration", 100))
-                return MediaInfo(
-                    width=image.width,
-                    height=image.height,
-                    duration=max(duration_ms / 1000, 0.1),
-                    kind="image",
-                    mime=Image.MIME.get(image.format or "", "image/gif"),
-                )
-    except (OSError, ValueError):
-        pass
+    # A source that Pillow cannot identify as animated falls through to FFmpeg probing.
+    with suppress(OSError, ValueError), Image.open(path) as image:
+        if getattr(image, "is_animated", False) or image.format in {"GIF", "WEBP"}:
+            duration_ms = 0
+            frames = getattr(image, "n_frames", 1)
+            for index in range(frames):
+                image.seek(index)
+                duration_ms += int(image.info.get("duration", 100))
+            return MediaInfo(
+                width=image.width,
+                height=image.height,
+                duration=max(duration_ms / 1000, 0.1),
+                kind="image",
+                mime=Image.MIME.get(image.format or "", "image/gif"),
+            )
 
     try:
         import imageio_ffmpeg
