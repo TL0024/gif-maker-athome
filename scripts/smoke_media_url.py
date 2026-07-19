@@ -12,9 +12,7 @@ from gifmaker.media import ExportOptions, MediaStore, import_media_url
 def main() -> None:
     media_url = os.environ.get("GIFMAKER_ATHOME_TEST_MEDIA_URL", "").strip()
     if not media_url:
-        raise SystemExit(
-            "Set GIFMAKER_ATHOME_TEST_MEDIA_URL to a supported media URL you are authorized to retrieve."
-        )
+        raise SystemExit("Set GIFMAKER_ATHOME_TEST_MEDIA_URL to a supported media URL you are authorized to retrieve.")
 
     with tempfile.TemporaryDirectory(prefix="gifmaker-athome-media-url-") as temporary:
         store = MediaStore(Path(temporary) / "data")

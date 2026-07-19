@@ -22,6 +22,12 @@ if ($LASTEXITCODE -ne 0) { throw "The runtime dependency audit found a vulnerabi
 & $python -m bandit -q -r app.py gifmaker scripts
 if ($LASTEXITCODE -ne 0) { throw "The Python security scan found an issue." }
 
+& $python -m compileall -q app.py gifmaker scripts tests
+if ($LASTEXITCODE -ne 0) { throw "The Python syntax check found an issue." }
+
+& $python -m ruff format --check app.py gifmaker scripts tests
+if ($LASTEXITCODE -ne 0) { throw "The Ruff formatting check found an issue." }
+
 & $python -m ruff check app.py gifmaker scripts tests
 if ($LASTEXITCODE -ne 0) { throw "The Ruff static analysis found an issue." }
 
@@ -38,4 +44,4 @@ if ($zizmorCommand) {
 & $zizmor --pedantic .github/workflows
 if ($LASTEXITCODE -ne 0) { throw "The GitHub Actions security analysis found an issue." }
 
-Write-Host "Dependency, source, type, and workflow security checks passed."
+Write-Host "Dependency, syntax, formatting, source, type, and workflow security checks passed."

@@ -1,5 +1,9 @@
 # GIFmakerAthome
 
+[![Quality gates](https://github.com/TL0024/gif-maker-athome/actions/workflows/security.yml/badge.svg)](https://github.com/TL0024/gif-maker-athome/actions/workflows/security.yml)
+[![CodeQL](https://github.com/TL0024/gif-maker-athome/actions/workflows/codeql.yml/badge.svg)](https://github.com/TL0024/gif-maker-athome/actions/workflows/codeql.yml)
+[![Latest release](https://img.shields.io/github/v/release/TL0024/gif-maker-athome)](https://github.com/TL0024/gif-maker-athome/releases/latest)
+
 GIFmakerAthome is a local-first Windows editor for turning videos and animated images into GIF, animated WebP, or VP9 WebM files. The interface opens in your browser, while the application and media processing stay on `127.0.0.1` on your computer. You can work with local files or media URLs supported by the installed importer.
 
 ## Download and run
@@ -12,6 +16,7 @@ The easiest option is the ready-to-run Windows executable:
 4. Keep the command window open while editing. Close it or press `Ctrl+C` to stop the application.
 
 The executable includes the application and media tools; Python is not required.
+Each release also includes `SHA256SUMS.txt`. To verify the download in PowerShell, run `Get-FileHash .\GIFmakerAthome.exe -Algorithm SHA256` and compare the result with that file.
 
 ### Run from source
 
@@ -56,7 +61,7 @@ After setup, local-file editing works offline. URL importing requires an interne
 
 Select GIF or WebM and choose **View all frames** for frame-level control. The working frame list reflects the current cut, crop, resolution, and FPS. You can drag frames into a new order, delete unwanted frames, restore the original sequence, or increase a frame's hold value. A hold of 1 is one tick at the selected FPS.
 
-A frame-editor session supports up to 900 source frames and 9,000 total hold ticks. Shorten the selection or reduce FPS if the working clip is too large. Changing the crop, timing, resolution, or FPS makes an existing frame list stale; rebuild it before compiling so the edited sequence matches the current settings.
+A frame-editor session supports up to 900 source frames and 18,000 total hold ticks. Shorten the selection or reduce FPS if the working clip is too large. Changing the crop, timing, resolution, or FPS makes an existing frame list stale; rebuild it before compiling so the edited sequence matches the current settings.
 
 ### Complete loops
 
@@ -118,11 +123,14 @@ The command is the same quality gate used by release builds and CI. It must comp
 - The project dependency policy, including the Pillow 12.3 minimum.
 - `pip-audit --strict` against published Python vulnerability advisories.
 - Bandit across the application and maintenance scripts.
-- Ruff with error, import, bug-risk, modernization, simplification, and project-hygiene rules.
+- Python bytecode compilation to reject syntax errors.
+- Ruff formatting plus error, import, bug-risk, modernization, simplification, and project-hygiene rules.
 - Strict mypy analysis of the application and scripts.
 - Zizmor's pedantic GitHub Actions audit.
 
-GitHub Actions runs the complete analysis for pushes and pull requests and every week. It also runs the test suite independently on Python 3.11 and 3.13. Third-party actions are pinned to immutable commits, the workflow has read-only repository access, checkout credentials are not persisted, and every job has a time limit. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow and [SECURITY.md](SECURITY.md) for vulnerability reporting and supported versions.
+GitHub Actions separates those checks into independently enforceable jobs and adds PSScriptAnalyzer, pull-request dependency review, CodeQL analysis for Python and JavaScript, tests on Python 3.11 and 3.13, and a clean PyInstaller build. Third-party actions are pinned to immutable commits, ordinary workflows have read-only repository access, checkout credentials are not persisted, and every job has a time limit. Dependabot proposes grouped Python and Actions updates each week.
+
+The `main` branch requires pull requests and successful quality checks. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design, [docs/CI.md](docs/CI.md) for every automated gate, [docs/RELEASING.md](docs/RELEASING.md) for the release process, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 The optional live media-URL smoke test is separate because it uses the network. Supply a URL that you are authorized to retrieve:
 
@@ -139,7 +147,7 @@ Run the release script from PowerShell:
 .\build-release.ps1
 ```
 
-The script installs the development tools into `.venv`, runs the security checks and tests, and uses `GIFmakerAthome.spec` to create `release\GIFmakerAthome.exe`. The executable embeds the templates, styles, scripts, icon, and FFmpeg runtime needed by the application.
+The script installs the development tools into `.venv`, runs the security checks and tests, and uses `GIFmakerAthome.spec` to create `release\GIFmakerAthome.exe` and `release\SHA256SUMS.txt`. The executable embeds the templates, styles, scripts, icon, and FFmpeg runtime needed by the application.
 
 ## Repository layout
 
@@ -148,6 +156,7 @@ The script installs the development tools into `.venv`, runs the security checks
 - `templates/` and `static/` contain the interface and application icon.
 - `tests/` contains the automated test suite.
 - `scripts/` contains the optional live link-import smoke test.
+- `docs/` explains the architecture, CI policy, and release process.
 - `pyproject.toml`, `security-check.ps1`, and `.github/workflows/security.yml` define and enforce the quality gates.
 - `packaging/` and `GIFmakerAthome.spec` contain Windows release metadata.
 

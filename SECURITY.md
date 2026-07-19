@@ -18,4 +18,4 @@ Every export removes inherited metadata and non-video streams. Nevertheless, tre
 
 ## Automated checks
 
-Release builds and GitHub Actions enforce dependency consistency and security-version policy, vulnerability auditing, Bandit, Ruff, strict mypy, Zizmor, and the automated test suite. The scheduled workflow repeats these checks weekly so newly published dependency advisories are surfaced even when the source has not changed.
+Release builds and GitHub Actions enforce dependency consistency and security-version policy, vulnerability auditing, Bandit, Ruff formatting and linting, strict mypy, PSScriptAnalyzer, Zizmor, CodeQL for Python and browser JavaScript, dependency review, the automated test suite, and a clean Windows package build. Scheduled workflows repeat the advisory and static-analysis checks weekly so newly published findings are surfaced even when the source has not changed.

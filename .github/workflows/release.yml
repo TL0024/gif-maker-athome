@@ -1,0 +1,65 @@
+name: Release Windows executable
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write # Required to create the tagged GitHub release and upload its assets.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install release dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run release security gate
+        shell: pwsh
+        run: .\security-check.ps1 -PythonPath (Get-Command python).Source
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build executable
+        run: python -m PyInstaller --noconfirm --clean --distpath release --workpath build GIFmakerAthome.spec
+
+      - name: Create checksum file
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash release\GIFmakerAthome.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  GIFmakerAthome.exe" | Set-Content release\SHA256SUMS.txt -Encoding ascii
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create $env:RELEASE_TAG `
+            --verify-tag `
+            --title "GIFmakerAthome $env:RELEASE_TAG" `
+            --generate-notes `
+            release\GIFmakerAthome.exe `
+            release\SHA256SUMS.txt
