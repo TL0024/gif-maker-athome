@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d1017">
+  <meta name="gifmaker-athome-token" content="{{ request_token }}">
+  <title>GIFmakerAthome · Local video to GIF, WebP, and WebM</title>
+  <link rel="icon" href="{{ url_for('static', filename='icons/gifmaker-athome.ico') }}" sizes="any">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="GIFmakerAthome home">
+      <span class="brand-mark"><span></span><span></span><span></span></span>
+      <span>GIFmakerAthome</span>
+    </a>
+    <div class="header-actions">
+      <button class="clear-cache-button" id="clearCacheButton" type="button"><span>⌫</span> Clear cache</button>
+      <div class="local-badge"><span class="status-dot"></span> Runs on this computer</div>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section class="hero" id="heroSection">
+      <div class="eyebrow"><span>Private by default</span><i></i><span>Frame-precise</span></div>
+      <h1>Turn any moment into<br><em>a great loop.</em></h1>
+      <p>Import a video, paste a link, crop what matters, and export—all from your own computer.</p>
+    </section>
+
+    <section class="import-panel" id="importPanel" aria-labelledby="importTitle">
+      <div class="source-tabs" role="tablist" aria-label="Import source">
+        <button class="source-tab active" data-tab="file" role="tab" aria-selected="true">
+          <span class="tab-icon">↑</span> Upload a file
+        </button>
+        <button class="source-tab" data-tab="link" role="tab" aria-selected="false">
+          <span class="tab-icon">↗</span> Paste a link
+        </button>
+      </div>
+
+      <div class="tab-content active" id="fileTab" role="tabpanel">
+        <input id="fileInput" type="file" accept="video/*,image/gif,image/webp" hidden>
+        <button class="drop-zone" id="dropZone" type="button">
+          <span class="upload-orbit"><span class="upload-arrow">↑</span></span>
+          <strong>Drop a video or GIF here</strong>
+          <span>or click to browse your files</span>
+          <small>MP4, MOV, WebM, MKV, AVI, GIF, and animated WebP</small>
+        </button>
+      </div>
+
+      <div class="tab-content" id="linkTab" role="tabpanel" hidden>
+        <label class="link-field" for="linkInput">
+          <span class="link-glyph">↗</span>
+          <input id="linkInput" type="url" placeholder="Paste a supported media URL…" autocomplete="off">
+          <button id="importLinkButton" class="primary-button compact" type="button">Import</button>
+        </label>
+        <p class="link-help">Only import media you own or are authorized to use. Follow applicable laws, licenses, and source terms.</p>
+      </div>
+    </section>
+
+    <section class="loading-panel" id="loadingPanel" hidden aria-live="polite">
+      <div class="spinner"><span></span></div>
+      <div><strong id="loadingTitle">Importing media…</strong><p id="loadingDetail">Long or high-resolution videos can take a moment.</p></div>
+    </section>
+
+    <section class="editor" id="editor" hidden>
+      <div class="editor-heading">
+        <div>
+          <span class="section-kicker">Editor</span>
+          <h2 id="mediaName">Your media</h2>
+          <p id="mediaMeta">—</p>
+        </div>
+        <button type="button" class="ghost-button" id="replaceButton">＋ New media</button>
+      </div>
+
+      <div class="workspace-grid">
+        <div class="preview-column">
+          <div class="preview-card">
+            <div class="preview-toolbar">
+              <div class="toolbar-label"><span class="crop-glyph">⌗</span> Crop</div>
+              <div class="aspect-list" role="group" aria-label="Crop aspect ratio">
+                <button type="button" class="chip" data-aspect="free">Free</button>
+                <button type="button" class="chip active" data-aspect="original">Original</button>
+                <button type="button" class="chip" data-aspect="1">1:1</button>
+                <button type="button" class="chip" data-aspect="1.7777778">16:9</button>
+                <button type="button" class="chip" data-aspect="0.5625">9:16</button>
+              </div>
+            </div>
+
+            <div class="stage-wrap">
+              <div class="media-stage" id="mediaStage">
+                <video id="videoPreview" playsinline muted preload="metadata" hidden></video>
+                <img id="imagePreview" alt="Animated media preview" hidden>
+                <div class="crop-shade shade-top"></div>
+                <div class="crop-shade shade-left"></div>
+                <div class="crop-shade shade-right"></div>
+                <div class="crop-shade shade-bottom"></div>
+                <div class="crop-box" id="cropBox">
+                  <span class="grid-line grid-v one"></span><span class="grid-line grid-v two"></span>
+                  <span class="grid-line grid-h one"></span><span class="grid-line grid-h two"></span>
+                  <button class="crop-handle nw" data-handle="nw" aria-label="Resize crop from top left"></button>
+                  <button class="crop-handle ne" data-handle="ne" aria-label="Resize crop from top right"></button>
+                  <button class="crop-handle sw" data-handle="sw" aria-label="Resize crop from bottom left"></button>
+                  <button class="crop-handle se" data-handle="se" aria-label="Resize crop from bottom right"></button>
+                  <span class="crop-size" id="cropSize">—</span>
+                </div>
+              </div>
+            </div>
+            <p class="preview-error" id="previewError" hidden></p>
+          </div>
+
+          <div class="timeline-card">
+            <div class="card-title-row">
+              <div><span class="timeline-glyph">↔</span><strong>Choose frames</strong></div>
+              <button type="button" class="text-button" id="previewSelectionButton">▶ Preview cut</button>
+            </div>
+
+            <div class="mode-toggle" role="radiogroup" aria-label="Cut mode">
+              <label><input type="radio" name="cutMode" value="keep" checked><span>Keep selected range</span></label>
+              <label><input type="radio" name="cutMode" value="discard"><span>Remove selected middle</span></label>
+            </div>
+
+            <div class="timeline-readout">
+              <label>Start <span class="time-input-wrap"><input id="startNumber" type="number" min="0" step="0.01" value="0"><i>s</i></span></label>
+              <span class="duration-pill" id="selectedDuration">0.00s output</span>
+              <label>End <span class="time-input-wrap"><input id="endNumber" type="number" min="0" step="0.01" value="0"><i>s</i></span></label>
+            </div>
+
+            <div class="range-shell" id="rangeShell">
+              <div class="range-track"><span class="range-fill" id="rangeFill"></span></div>
+              <input id="startRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="Start time">
+              <input id="endRange" type="range" min="0" max="1" step="0.01" value="1" aria-label="End time">
+            </div>
+            <div class="range-labels"><span>0:00</span><span id="totalDurationLabel">0:00</span></div>
+            <p class="mode-hint" id="modeHint">Only the selected interval becomes the animation.</p>
+            <div class="frame-editor-launch">
+              <div>
+                <strong>Edit every frame</strong>
+                <span>Reorder, set hold timing, or remove individual frames.</span>
+              </div>
+              <button type="button" class="ghost-button" id="openFrameEditorButton">View all frames</button>
+            </div>
+          </div>
+
+          <div class="frame-editor-card" id="frameEditorPanel" hidden>
+            <div class="frame-editor-heading">
+              <div>
+                <span class="section-kicker">Frame editor</span>
+                <h3>Arrange the exact sequence</h3>
+                <p id="frameEditorSummary">Drag frames to reorder them. A hold of 1 equals one tick at the selected FPS.</p>
+              </div>
+              <button type="button" class="text-button" id="closeFrameEditorButton">Close</button>
+            </div>
+            <div class="frame-editor-status" id="frameEditorStatus" aria-live="polite"></div>
+            <div class="frame-grid" id="frameGrid" aria-label="Draggable animation frames"></div>
+            <div class="frame-editor-actions">
+              <button type="button" class="ghost-button" id="resetFramesButton">Restore all and reset order</button>
+              <button type="button" class="primary-button" id="exportFramesButton">Compile edited WebM</button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="settings-card">
+          <div class="settings-heading"><span>Export settings</span><small id="formatBadge">WEBM</small></div>
+
+          <label class="control-label" for="outputFormat">Format</label>
+          <select id="outputFormat" class="select-control">
+            <option value="webm" selected>WebM · default</option>
+            <option value="gif">GIF · widest compatibility</option>
+            <option value="webp">Animated WebP · smaller files</option>
+          </select>
+          <p class="control-note" id="formatNote">VP9 WebM has no audio and usually offers the best animation efficiency.</p>
+
+          <div class="separator"></div>
+
+          <label class="control-label" for="resolutionSelect">Resolution</label>
+          <select id="resolutionSelect" class="select-control">
+            <option value="original">Original crop size</option>
+            <option value="512square">512 × 512 · square</option>
+            <option value="0.75">75%</option>
+            <option value="0.5">50%</option>
+            <option value="0.25">25%</option>
+            <option value="0.1">10% · smallest</option>
+            <option value="custom">Custom</option>
+          </select>
+          <div class="dimension-row">
+            <label><span>Width</span><input id="outputWidth" type="number" min="1" max="4096"></label>
+            <button class="link-lock active" id="dimensionLock" type="button" aria-label="Lock output aspect ratio">⌁</button>
+            <label><span>Height</span><input id="outputHeight" type="number" min="1" max="4096"></label>
+          </div>
+          <p class="control-note" id="resolutionNote">No resizing—the cropped pixels stay at source resolution.</p>
+
+          <div class="separator"></div>
+
+          <label class="control-label" for="fpsSelect">Frame rate</label>
+          <select id="fpsSelect" class="select-control">
+            <option value="1">1 FPS · minimum</option>
+            <option value="2">2 FPS · extreme compression</option>
+            <option value="5">5 FPS · very small</option>
+            <option value="8">8 FPS · compact</option>
+            <option value="10">10 FPS · smaller</option>
+            <option value="15">15 FPS · balanced</option>
+            <option value="20">20 FPS · smooth</option>
+            <option value="24">24 FPS · very smooth</option>
+            <option value="30" selected>30 FPS · default</option>
+          </select>
+
+          <div id="qualityControl">
+            <label class="control-label spaced" id="qualityLabel" for="qualitySelect">WebM quality</label>
+            <select id="qualitySelect" class="select-control">
+              <option value="1">Minimum · 1</option>
+              <option value="5">Extreme · 5</option>
+              <option value="10">Very low · 10</option>
+              <option value="25">Low · 25</option>
+              <option value="40" selected>Reduced · 40 · default</option>
+              <option value="50">Small · 50</option>
+              <option value="65">Compact · 65</option>
+              <option value="75">Balanced · 75</option>
+              <option value="85">High · 85</option>
+              <option value="95">Maximum · 95</option>
+            </select>
+          </div>
+
+          <div id="gifColorsControl" hidden>
+            <label class="control-label spaced" for="colorsSelect">GIF color palette</label>
+            <select id="colorsSelect" class="select-control">
+              <option value="8">Extreme · 8 colors</option>
+              <option value="16">Very low · 16 colors</option>
+              <option value="32">Low · 32 colors</option>
+              <option value="64">Compact · 64 colors</option>
+              <option value="128">Balanced · 128 colors</option>
+              <option value="192">High · 192 colors</option>
+              <option value="256" selected>Maximum · 256 colors</option>
+            </select>
+          </div>
+
+          <div class="gif-compression-panel unavailable" id="gifCompressionPanel">
+            <div class="compression-panel-heading">
+              <span>Automatic GIF compression</span><small>Optional</small>
+            </div>
+            <label class="compression-option">
+              <input id="reduceColorsOption" type="checkbox" disabled>
+              <span><strong>Reduce the number of colors</strong><small>Automatically limits the palette to 64 colors</small></span>
+              <i aria-label="Five-star size reduction">★★★★★</i>
+            </label>
+            <label class="compression-option">
+              <input id="lossyGifOption" type="checkbox" disabled>
+              <span><strong>Enable lossy GIF compression</strong><small>Smooths fine detail and uses compact ordered dithering</small></span>
+              <i aria-label="Four-star size reduction">★★★★</i>
+            </label>
+            <label class="compression-option">
+              <input id="optimizePixelsOption" type="checkbox" disabled>
+              <span><strong>Optimize unchanged pixels</strong><small>Processes only the rectangle that changes between frames</small></span>
+              <i aria-label="Four-star size reduction">★★★★</i>
+            </label>
+            <label class="compression-option">
+              <input id="removeDuplicatesOption" type="checkbox" disabled>
+              <span><strong>Remove duplicate frames</strong><small>Merges identical consecutive frames while retaining timing</small></span>
+              <i aria-label="Three-star size reduction">★★★</i>
+            </label>
+            <p id="gifCompressionNote">Switch the output format to GIF to use these techniques.</p>
+          </div>
+
+          <div class="separator"></div>
+
+          <label class="control-label" for="sizeLimitSelect">File-size cap</label>
+          <select id="sizeLimitSelect" class="select-control">
+            <option value="none" selected>No hard cap</option>
+            <option value="256">Maximum 256 KB · Telegram</option>
+            <option value="512">Maximum 512 KB</option>
+            <option value="1024">Maximum 1 MB</option>
+            <option value="2048">Maximum 2 MB</option>
+            <option value="custom">Custom limit</option>
+          </select>
+          <label class="size-cap-custom" id="customSizeLimitControl" for="customSizeLimit" hidden>
+            <span>Maximum size</span>
+            <span class="size-input-wrap"><input id="customSizeLimit" type="number" min="16" max="1048576" value="256"><i>KB</i></span>
+          </label>
+          <p class="control-note">With a cap, quality is reduced first, followed by FPS and resolution only as needed. Extra encoding passes can take longer. Audio, metadata, subtitles, chapters, and data tracks are always removed.</p>
+
+          <div class="export-summary">
+            <span>Expected output</span>
+            <strong id="outputSummary">—</strong>
+            <small id="outputDurationSummary">—</small>
+          </div>
+
+          <button type="button" class="primary-button export-button" id="exportButton">
+            <span id="exportButtonLabel">Create WebM</span><i id="exportButtonIcon">→</i>
+          </button>
+          <p class="local-note"><span>◇</span> Generated entirely on this computer</p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="result-panel" id="resultPanel" hidden aria-live="polite">
+      <div class="result-copy">
+        <span class="success-mark">✓</span>
+        <div><span class="section-kicker">Ready</span><h2 id="resultTitle">Your animation is finished.</h2><p id="resultMeta">Processed locally.</p></div>
+      </div>
+      <div class="result-layout">
+        <div class="result-preview">
+          <img id="resultImage" alt="Generated animation preview">
+          <video id="resultVideo" autoplay loop muted playsinline hidden></video>
+        </div>
+        <div class="result-actions">
+          <button id="extendLoopButton" class="ghost-button extend-loop-button" type="button"><span>↔</span> Extend into complete loop</button>
+          <a id="downloadButton" class="primary-button" href="#" download><span id="downloadLabel">Download WebM</span> <span>↓</span></a>
+          <button id="editAgainButton" class="ghost-button" type="button">Adjust and export again</button>
+          <button id="startOverButton" class="text-button" type="button">Start with new media</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="toast" id="toast" role="alert" hidden><span id="toastIcon">!</span><p id="toastMessage"></p><button id="toastClose" aria-label="Dismiss">×</button></div>
+  </main>
+
+  <footer><span>GIFmakerAthome</span><p>Local editing. No accounts. No uploads to a third-party service.</p></footer>
+  <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+</body>
+</html>
