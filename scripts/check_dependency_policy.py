@@ -49,15 +49,9 @@ def dependency_policy_errors(
             )
 
         try:
-            installed = (
-                installed_versions[package_name]
-                if installed_versions is not None
-                else version(package_name)
-            )
+            installed = installed_versions[package_name] if installed_versions is not None else version(package_name)
             if Version(installed) < minimum:
-                errors.append(
-                    f"Installed {package_name} {installed} is below the required security floor {minimum}."
-                )
+                errors.append(f"Installed {package_name} {installed} is below the required security floor {minimum}.")
         except (KeyError, PackageNotFoundError):
             errors.append(f"{package_name} is not installed.")
 

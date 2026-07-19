@@ -32,7 +32,9 @@ Then run the tests:
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-The gate checks dependency consistency and minimum versions, known dependency advisories, Python security patterns, lint and import rules, strict typing, and GitHub Actions security. A pull request must pass both CI test versions and the static-analysis job.
+The local gate checks dependency consistency and minimum versions, known dependency advisories, Python security patterns, syntax and formatting, lint and import rules, strict typing, and GitHub Actions security. CI additionally runs PSScriptAnalyzer, dependency review, CodeQL for Python and JavaScript, both supported test versions, and a clean Windows executable build. See [docs/CI.md](docs/CI.md) for the complete check list.
+
+Create changes on a topic branch and open a pull request against `main`. The protected branch requires the current branch to be up to date, all required checks to pass, and all review conversations to be resolved. Do not bypass a failed gate to publish a release.
 
 When changing media processing, add or update a focused automated test. The optional live URL smoke test requires an authorized test URL and is intentionally not part of CI:
 
@@ -49,7 +51,7 @@ After all checks pass, build the Windows executable with:
 .\build-release.ps1
 ```
 
-The output is `release\GIFmakerAthome.exe`. Do not commit generated executables, build directories, virtual environments, caches, or temporary media.
+The outputs are `release\GIFmakerAthome.exe` and `release\SHA256SUMS.txt`. Do not commit generated executables, build directories, virtual environments, caches, or temporary media. Maintainers publish releases by following [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Contribution scope
 

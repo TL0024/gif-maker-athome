@@ -134,8 +134,7 @@ def test_media_store_clears_all_cache_files_on_startup_and_on_demand(tmp_path: P
     assert not stale.exists()
     assert store.startup_cleanup == {"files": 1, "bytes": 9}
     assert all(
-        directory.is_dir()
-        for directory in (store.import_dir, store.export_dir, store.preview_dir, store.frame_dir)
+        directory.is_dir() for directory in (store.import_dir, store.export_dir, store.preview_dir, store.frame_dir)
     )
 
     generated = store.export_dir / "temporary.bin"
@@ -245,11 +244,31 @@ def test_real_ffmpeg_exports_gif_webp_and_webm_with_crop_resize_and_middle_remov
     source_path = tmp_path / "sample.mp4"
     create = subprocess.run(
         [
-            ffmpeg_executable(), "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10",
-            "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
-            "-t", "3", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-metadata", "title=Remove this metadata", "-y", str(source_path),
+            ffmpeg_executable(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=160x90:rate=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:sample_rate=44100",
+            "-t",
+            "3",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-metadata",
+            "title=Remove this metadata",
+            "-y",
+            str(source_path),
         ],
         capture_output=True,
         text=True,
@@ -370,9 +389,22 @@ def test_duplicate_gif_frames_are_merged_without_losing_total_duration(tmp_path:
     source_path = tmp_path / "still.mp4"
     created = subprocess.run(
         [
-            ffmpeg_executable(), "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "color=c=red:size=64x64:rate=10",
-            "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", str(source_path),
+            ffmpeg_executable(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:size=64x64:rate=10",
+            "-t",
+            "2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-y",
+            str(source_path),
         ],
         capture_output=True,
         text=True,

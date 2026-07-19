@@ -14,3 +14,7 @@ show_error_codes = true
 pretty = true
 files = ["app.py", "gifmaker", "scripts"]
 exclude = ["build", "release", ".venv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-config", "--strict-markers"]

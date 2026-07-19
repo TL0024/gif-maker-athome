@@ -98,11 +98,7 @@ class ExportOptions:
                 fps=int(payload.get("fps", 30)),
                 colors=int(payload.get("colors", 256)),
                 quality=int(payload.get("quality", 40)),
-                max_size_kb=(
-                    None
-                    if payload.get("max_size_kb") in {None, "", 0, "0"}
-                    else int(payload["max_size_kb"])
-                ),
+                max_size_kb=(None if payload.get("max_size_kb") in {None, "", 0, "0"} else int(payload["max_size_kb"])),
                 reduce_colors=bool(payload.get("reduce_colors", False)),
                 lossy_gif=bool(payload.get("lossy_gif", False)),
                 optimize_unchanged_pixels=bool(payload.get("optimize_unchanged_pixels", False)),
@@ -172,11 +168,7 @@ class FrameExportOptions:
                 output_height=sequence.height,
                 colors=int(payload.get("colors", 256)),
                 quality=int(payload.get("quality", 40)),
-                max_size_kb=(
-                    None
-                    if payload.get("max_size_kb") in {None, "", 0, "0"}
-                    else int(payload["max_size_kb"])
-                ),
+                max_size_kb=(None if payload.get("max_size_kb") in {None, "", 0, "0"} else int(payload["max_size_kb"])),
                 reduce_colors=bool(payload.get("reduce_colors", False)),
                 lossy_gif=bool(payload.get("lossy_gif", False)),
                 optimize_unchanged_pixels=bool(payload.get("optimize_unchanged_pixels", False)),
@@ -210,9 +202,7 @@ def ffmpeg_executable() -> str:
         system_ffmpeg = shutil.which("ffmpeg")
         if system_ffmpeg:
             return system_ffmpeg
-        raise MediaError(
-            "FFmpeg is unavailable. Run install.bat (or install requirements.txt) and try again."
-        ) from exc
+        raise MediaError("FFmpeg is unavailable. Run install.bat (or install requirements.txt) and try again.") from exc
 
 
 def _run_ffmpeg(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -279,23 +269,15 @@ def build_filter_graph(options: ExportOptions, duration: float) -> str:
     """Build the FFmpeg graph for trim/remove, crop, scale, and the selected encoder."""
     filters: list[str] = []
     if not options.discard_middle:
-        filters.append(
-            f"[0:v]trim=start={_num(options.start)}:end={_num(options.end)},"
-            "setpts=PTS-STARTPTS[cut]"
-        )
+        filters.append(f"[0:v]trim=start={_num(options.start)}:end={_num(options.end)},setpts=PTS-STARTPTS[cut]")
         source = "[cut]"
     else:
         segment_labels: list[str] = []
         if options.start > 0.001:
-            filters.append(
-                f"[0:v]trim=start=0:end={_num(options.start)},setpts=PTS-STARTPTS[before]"
-            )
+            filters.append(f"[0:v]trim=start=0:end={_num(options.start)},setpts=PTS-STARTPTS[before]")
             segment_labels.append("[before]")
         if options.end < duration - 0.001:
-            filters.append(
-                f"[0:v]trim=start={_num(options.end)}:end={_num(duration)},"
-                "setpts=PTS-STARTPTS[after]"
-            )
+            filters.append(f"[0:v]trim=start={_num(options.end)}:end={_num(duration)},setpts=PTS-STARTPTS[after]")
             segment_labels.append("[after]")
         if len(segment_labels) == 2:
             filters.append("[before][after]concat=n=2:v=1:a=0[cut]")
@@ -316,9 +298,7 @@ def build_filter_graph(options: ExportOptions, duration: float) -> str:
     if options.output_format == "gif":
         palette_colors = min(options.colors, 64) if options.reduce_colors else options.colors
         filters.append("[prepared]split[gif_frames][palette_source]")
-        filters.append(
-            f"[palette_source]palettegen=max_colors={palette_colors}:stats_mode=diff[palette]"
-        )
+        filters.append(f"[palette_source]palettegen=max_colors={palette_colors}:stats_mode=diff[palette]")
         palette_use = "[gif_frames][palette]paletteuse="
         palette_use += "dither=bayer:bayer_scale=5" if options.lossy_gif else "dither=sierra2_4a"
         if options.optimize_unchanged_pixels:
@@ -445,7 +425,7 @@ def _smaller_export_options(options: ExportOptions, target_bytes: int, actual_by
     """Choose a materially smaller next pass while preserving the selected aspect ratio."""
     ratio = max(0.001, min(0.999, target_bytes / max(actual_bytes, 1)))
     dimension_factor = max(0.5, min(0.92, math.sqrt(ratio * 0.88)))
-    fps_factor = max(0.62, min(0.92, ratio ** 0.18))
+    fps_factor = max(0.62, min(0.92, ratio**0.18))
 
     def shrink_dimension(value: int) -> int:
         minimum = min(value, 8)
@@ -462,7 +442,7 @@ def _smaller_export_options(options: ExportOptions, target_bytes: int, actual_by
         reduced_fps = options.fps - 1
 
     if options.output_format == "gif":
-        color_factor = max(0.45, min(0.85, ratio ** 0.24))
+        color_factor = max(0.45, min(0.85, ratio**0.24))
         reduced_colors = max(8, math.floor(options.colors * color_factor))
         if reduced_colors >= options.colors and options.colors > 8:
             reduced_colors = max(8, options.colors - 8)
@@ -517,23 +497,15 @@ def build_frame_extraction_graph(options: ExportOptions, duration: float) -> str
     """Build the selected cut/crop/resize/FPS graph used by the visual frame editor."""
     filters: list[str] = []
     if not options.discard_middle:
-        filters.append(
-            f"[0:v]trim=start={_num(options.start)}:end={_num(options.end)},"
-            "setpts=PTS-STARTPTS[cut]"
-        )
+        filters.append(f"[0:v]trim=start={_num(options.start)}:end={_num(options.end)},setpts=PTS-STARTPTS[cut]")
         source = "[cut]"
     else:
         segment_labels: list[str] = []
         if options.start > 0.001:
-            filters.append(
-                f"[0:v]trim=start=0:end={_num(options.start)},setpts=PTS-STARTPTS[before]"
-            )
+            filters.append(f"[0:v]trim=start=0:end={_num(options.start)},setpts=PTS-STARTPTS[before]")
             segment_labels.append("[before]")
         if options.end < duration - 0.001:
-            filters.append(
-                f"[0:v]trim=start={_num(options.end)}:end={_num(duration)},"
-                "setpts=PTS-STARTPTS[after]"
-            )
+            filters.append(f"[0:v]trim=start={_num(options.end)}:end={_num(duration)},setpts=PTS-STARTPTS[after]")
             segment_labels.append("[after]")
         if len(segment_labels) == 2:
             filters.append("[before][after]concat=n=2:v=1:a=0[cut]")
@@ -598,8 +570,7 @@ def extract_frame_sequence(
     if len(frames) > MAX_FRAME_EDITOR_FRAMES:
         shutil.rmtree(output_directory, ignore_errors=True)
         raise MediaError(
-            f"This selection produced more than {MAX_FRAME_EDITOR_FRAMES} frames. "
-            "Shorten it or choose a lower FPS."
+            f"This selection produced more than {MAX_FRAME_EDITOR_FRAMES} frames. Shorten it or choose a lower FPS."
         )
     return frames
 
@@ -611,9 +582,7 @@ def _encode_ordered_frames_once(
     output_path: Path,
     options: FrameExportOptions,
 ) -> None:
-    processing = (
-        f"[0:v]scale={options.output_width}:{options.output_height}:flags=lanczos"
-    )
+    processing = f"[0:v]scale={options.output_width}:{options.output_height}:flags=lanczos"
     if options.output_format == "gif" and options.lossy_gif:
         processing += ",hqdn3d=1.5:1.5:6:6"
     filters = [f"{processing}[prepared]"]
@@ -712,7 +681,7 @@ def _smaller_frame_export_options(
         return max(1, reduced)
 
     if options.output_format == "gif":
-        color_factor = max(0.45, min(0.85, ratio ** 0.24))
+        color_factor = max(0.45, min(0.85, ratio**0.24))
         colors = max(8, math.floor(options.colors * color_factor))
         if colors >= options.colors and options.colors > 8:
             colors = max(8, options.colors - 8)
