@@ -166,12 +166,42 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         assert b'id="frameEditorPanel"' in page.data
         assert b'id="clearCacheButton"' in page.data
         assert b'id="loadingProgress"' in page.data
+        assert b'<video id="videoPreview" playsinline muted preload="auto"' in page.data
+        assert b'id="currentTimestamp">0:00.00' in page.data
+        assert b'id="motionCropEnabled" type="checkbox"' in page.data
+        assert b'id="motionCropKeyframes"' in page.data
+        assert b'id="addMotionCropKeyframe"' in page.data
+        assert b'id="removeMotionCropKeyframe"' in page.data
+        assert b'id="motionCropTiming"' in page.data
+        assert b'id="evenMotionCropTiming"' not in page.data
+        assert b'id="motionTimelineMarkers"' in page.data
+        assert b'id="motionCropPlayhead"' not in page.data
         script = (Path(__file__).resolve().parents[1] / "static" / "js" / "app.js").read_text(encoding="utf-8")
         assert "Revert to forward only" in script
         assert 'addEventListener("dragstart"' in script
         assert "Compile edited" in script
         assert "data-delete-frame" in script
+        assert "data-duplicate-frame" in script
+        assert "createFrameItem" in script
         assert "Downloading linked media" in script
+        assert "asset.browser_preview_required" in script
+        assert "updatePreviewTimestamp" in script
+        assert "motion_crop: state.motionCropEnabled" in script
+        assert "motion_crop_keyframes:" in script
+        assert "motionCropTimingCustomized" not in script
+        assert "state.motionCropTimings = [0]" in script
+        assert "state.motionCropKeyframes.push(cloneCrop(state.motionCropKeyframes[previousIndex]))" in script
+        assert "state.motionCropTimings.push(state.motionCropTimings[previousIndex])" in script
+        assert "Add another position to finish the motion crop." in script
+        assert "Move the last position later than the first position." in script
+        assert "finalOutputDuration" in script
+        assert "endpointSelected" not in script
+        assert "renderMotionTimelineMarkers" in script
+        assert "motion-timeline-marker" in script
+        assert "elements.startRange.hidden = enabled" in script
+        assert "setMotionCropTimingFromPointer" in script
+        assert "motionTimelineDrag" in script
+        assert "updateMotionCropPreview" in script
         assert "navigator.sendBeacon" in script
         assert b'class="chip active" data-aspect="original"' in page.data
         assert b'rel="icon"' in page.data
@@ -224,6 +254,7 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         sequence = frame_response.get_json()["sequence"]
         assert (sequence["width"], sequence["height"], sequence["fps"]) == (20, 20, 10)
         assert len(sequence["frames"]) >= 2
+        assert all(frame["hold"] >= 1 for frame in sequence["frames"])
         served_frame = client.get(sequence["frames"][0]["url"])
         assert served_frame.status_code == 200
         assert served_frame.data.startswith(b"\x89PNG")
@@ -236,7 +267,7 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
                 "colors": 64,
                 "quality": 40,
                 "frames": [
-                    {"id": sequence["frames"][-1]["id"], "hold": 1},
+                    {"id": sequence["frames"][0]["id"], "hold": 1},
                     {"id": sequence["frames"][0]["id"], "hold": 2},
                 ],
             },

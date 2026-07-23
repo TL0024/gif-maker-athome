@@ -17,12 +17,13 @@ import uuid
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
+from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import requests
 from bs4 import BeautifulSoup
-from PIL import Image
+from PIL import Image, ImageChops
 from werkzeug.utils import secure_filename
 
 if TYPE_CHECKING:
@@ -49,6 +50,7 @@ class ImportProgress:
 
 
 ImportProgressCallback = Callable[[ImportProgress], None]
+MAX_MOTION_CROP_KEYFRAMES = 10
 
 
 def _report_import_progress(
@@ -81,6 +83,7 @@ class MediaInfo:
     duration: float
     kind: str
     mime: str
+    codec: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,13 +96,36 @@ class MediaAsset:
     duration: float
     kind: str
     mime: str
+    codec: str | None = None
+
+    @property
+    def browser_preview_required(self) -> bool:
+        """Whether the source needs transcoding before browsers can display it reliably."""
+        if self.kind != "video":
+            return False
+        browser_native_formats = {
+            ("video/mp4", "h264"),
+            ("video/webm", "vp8"),
+            ("video/webm", "vp9"),
+        }
+        return (self.mime, self.codec or "") not in browser_native_formats
 
     def as_api_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data.pop("path")
         data["duration"] = round(self.duration, 3)
         data["size"] = self.path.stat().st_size if self.path.exists() else 0
+        data["browser_preview_required"] = self.browser_preview_required
         return data
+
+
+@dataclass(frozen=True)
+class MotionCropKeyframe:
+    x: int
+    y: int
+    width: int
+    height: int
+    progress: float | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +139,10 @@ class ExportOptions:
     crop_height: int
     output_width: int
     output_height: int
+    motion_crop: bool = False
+    crop_end_x: int = 0
+    crop_end_y: int = 0
+    motion_crop_keyframes: tuple[MotionCropKeyframe, ...] = ()
     output_format: str = "webm"
     fps: int = 30
     colors: int = 256
@@ -126,6 +156,22 @@ class ExportOptions:
     @classmethod
     def from_payload(cls, payload: dict[str, Any], media: MediaAsset) -> ExportOptions:
         try:
+            raw_keyframes = payload.get("motion_crop_keyframes") or ()
+            if not isinstance(raw_keyframes, (list, tuple)):
+                raise TypeError("motion crop keyframes must be a list")
+            keyframes = tuple(
+                MotionCropKeyframe(
+                    x=int(item["x"]),
+                    y=int(item["y"]),
+                    width=int(item["width"]),
+                    height=int(item["height"]),
+                    progress=None if item.get("progress") is None else float(item["progress"]),
+                )
+                for item in raw_keyframes
+                if isinstance(item, Mapping)
+            )
+            if len(keyframes) != len(raw_keyframes):
+                raise TypeError("every motion crop keyframe must be an object")
             options = cls(
                 start=float(payload.get("start", 0)),
                 end=float(payload.get("end", media.duration)),
@@ -136,6 +182,10 @@ class ExportOptions:
                 crop_height=int(payload.get("crop_height", media.height)),
                 output_width=int(payload.get("output_width", media.width)),
                 output_height=int(payload.get("output_height", media.height)),
+                motion_crop=bool(payload.get("motion_crop", False)),
+                crop_end_x=int(payload.get("crop_end_x", payload.get("crop_x", 0))),
+                crop_end_y=int(payload.get("crop_end_y", payload.get("crop_y", 0))),
+                motion_crop_keyframes=keyframes,
                 output_format=str(payload.get("output_format", "webm")).strip().lower(),
                 fps=int(payload.get("fps", 30)),
                 colors=int(payload.get("colors", 256)),
@@ -146,7 +196,7 @@ class ExportOptions:
                 optimize_unchanged_pixels=bool(payload.get("optimize_unchanged_pixels", False)),
                 remove_duplicate_frames=bool(payload.get("remove_duplicate_frames", False)),
             )
-        except (TypeError, ValueError) as exc:
+        except (KeyError, TypeError, ValueError) as exc:
             raise MediaError("One or more export settings are invalid.") from exc
         options.validate(media)
         return options
@@ -161,6 +211,27 @@ class ExportOptions:
             raise MediaError("The crop rectangle is invalid.")
         if self.crop_x + self.crop_width > media.width or self.crop_y + self.crop_height > media.height:
             raise MediaError("The crop rectangle extends outside the source.")
+        if self.motion_crop and not 2 <= len(self.resolved_motion_crop_keyframes()) <= MAX_MOTION_CROP_KEYFRAMES:
+            raise MediaError(f"Motion crop requires between 2 and {MAX_MOTION_CROP_KEYFRAMES} positions.")
+        if self.motion_crop:
+            keyframes = self.resolved_motion_crop_keyframes()
+            progresses = [float(keyframe.progress or 0) for keyframe in keyframes]
+            if any(not math.isfinite(progress) or progress < 0 or progress > 1 for progress in progresses) or any(
+                current < previous for previous, current in pairwise(progresses)
+            ):
+                raise MediaError("Motion crop timings must not move backward and must stay within the output.")
+            if progresses[-1] <= progresses[0]:
+                raise MediaError("The last motion crop position must be later than the first position.")
+            for keyframe in keyframes:
+                if (
+                    keyframe.width < 1
+                    or keyframe.height < 1
+                    or keyframe.x < 0
+                    or keyframe.y < 0
+                    or keyframe.x + keyframe.width > media.width
+                    or keyframe.y + keyframe.height > media.height
+                ):
+                    raise MediaError("A motion crop position extends outside the source.")
         if not (1 <= self.output_width <= 4096 and 1 <= self.output_height <= 4096):
             raise MediaError("Output dimensions must be between 1 and 4096 pixels.")
         if self.output_width * self.output_height > 16_777_216:
@@ -176,6 +247,21 @@ class ExportOptions:
         if self.max_size_kb is not None and not 16 <= self.max_size_kb <= 1_048_576:
             raise MediaError("File-size cap must be between 16 KB and 1 GB.")
 
+    def resolved_motion_crop_keyframes(self) -> tuple[MotionCropKeyframe, ...]:
+        if self.motion_crop_keyframes:
+            count = len(self.motion_crop_keyframes)
+            return tuple(
+                replace(
+                    keyframe,
+                    progress=keyframe.progress if keyframe.progress is not None else index / max(1, count - 1),
+                )
+                for index, keyframe in enumerate(self.motion_crop_keyframes)
+            )
+        return (
+            MotionCropKeyframe(self.crop_x, self.crop_y, self.crop_width, self.crop_height, 0),
+            MotionCropKeyframe(self.crop_end_x, self.crop_end_y, self.crop_width, self.crop_height, 1),
+        )
+
 
 @dataclass(frozen=True)
 class FrameSequence:
@@ -186,6 +272,7 @@ class FrameSequence:
     height: int
     fps: int
     frames: tuple[Path, ...]
+    holds: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -296,13 +383,110 @@ def probe_media(path: Path) -> MediaInfo:
         if not size or duration <= 0:
             raise ValueError("missing dimensions or duration")
         mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
-        return MediaInfo(int(size[0]), int(size[1]), duration, "video", mime)
+        codec = str(metadata.get("codec") or "").strip().lower() or None
+        return MediaInfo(int(size[0]), int(size[1]), duration, "video", mime, codec)
     except (ImportError, OSError, RuntimeError, StopIteration, ValueError) as exc:
         raise MediaError("This file is not a readable video or animated image.") from exc
 
 
 def _num(value: float) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _selected_output_duration(options: ExportOptions, duration: float) -> float:
+    if options.discard_middle:
+        return options.start + max(0, duration - options.end)
+    return max(0, options.end - options.start)
+
+
+def _motion_crop_time_window(options: ExportOptions, duration: float) -> tuple[float, float]:
+    selected_duration = _selected_output_duration(options, duration)
+    if not options.motion_crop:
+        return 0, selected_duration
+    keyframes = options.resolved_motion_crop_keyframes()
+    first_progress = keyframes[0].progress
+    last_progress = keyframes[-1].progress
+    return (
+        selected_duration * (0 if first_progress is None else first_progress),
+        selected_duration * (1 if last_progress is None else last_progress),
+    )
+
+
+def _motion_crop_output_duration(options: ExportOptions, duration: float) -> float:
+    start, end = _motion_crop_time_window(options, duration)
+    return max(0, end - start)
+
+
+def _motion_crop_window_filter(options: ExportOptions, duration: float) -> str:
+    if not options.motion_crop:
+        return ""
+    selected_duration = _selected_output_duration(options, duration)
+    start, end = _motion_crop_time_window(options, duration)
+    if start <= 1e-9 and end >= selected_duration - 1e-9:
+        return ""
+    return f",trim=start={_num(start)}:end={_num(end)},setpts=PTS-STARTPTS"
+
+
+def _keyframed_expression(
+    keyframes: tuple[MotionCropKeyframe, ...],
+    attribute: str,
+    duration: float,
+) -> str:
+    values = [int(getattr(keyframe, attribute)) for keyframe in keyframes]
+    if len(set(values)) == 1:
+        return str(values[0])
+    expression = str(values[-1])
+    for index in range(len(values) - 2, -1, -1):
+        start_value = keyframes[index].progress
+        end_value = keyframes[index + 1].progress
+        start_progress = 0.0 if start_value is None else start_value
+        end_progress = 1.0 if end_value is None else end_value
+        segment_start = duration * start_progress
+        segment_end = duration * end_progress
+        segment_duration = segment_end - segment_start
+        if segment_duration <= 1e-9:
+            continue
+        elapsed = "t" if math.isclose(segment_start, 0, abs_tol=1e-9) else f"(t-{_num(segment_start)})"
+        interpolation = f"{values[index]}+({values[index + 1] - values[index]})*{elapsed}/{_num(segment_duration)}"
+        expression = f"if(lt(t,{_num(segment_end)}),{interpolation},{expression})"
+    first_progress = keyframes[0].progress or 0
+    if first_progress > 0:
+        expression = f"if(lt(t,{_num(duration * first_progress)}),{values[0]},{expression})"
+    return expression
+
+
+def _crop_and_scale_filter(options: ExportOptions, duration: float) -> str:
+    static = (
+        f"crop={options.crop_width}:{options.crop_height}:{options.crop_x}:{options.crop_y},"
+        f"scale={options.output_width}:{options.output_height}:flags=lanczos"
+    )
+    if not options.motion_crop:
+        return static
+
+    keyframes = options.resolved_motion_crop_keyframes()
+    if len(set(keyframes)) == 1:
+        return static
+
+    travel_duration = max(0.001, _selected_output_duration(options, duration))
+    x_expression = _keyframed_expression(keyframes, "x", travel_duration)
+    y_expression = _keyframed_expression(keyframes, "y", travel_duration)
+    width_expression = _keyframed_expression(keyframes, "width", travel_duration)
+    height_expression = _keyframed_expression(keyframes, "height", travel_duration)
+    fixed_size = len({(keyframe.width, keyframe.height) for keyframe in keyframes}) == 1
+    if fixed_size:
+        return (
+            f"crop={keyframes[0].width}:{keyframes[0].height}:"
+            f"'{x_expression}':'{y_expression}',"
+            f"scale={options.output_width}:{options.output_height}:flags=lanczos"
+        )
+
+    scaled_x = f"({x_expression})*{options.output_width}/({width_expression})"
+    scaled_y = f"({y_expression})*{options.output_height}/({height_expression})"
+    return (
+        f"scale=w='iw*{options.output_width}/({width_expression})':"
+        f"h='ih*{options.output_height}/({height_expression})':flags=lanczos:eval=frame,"
+        f"crop={options.output_width}:{options.output_height}:'{scaled_x}':'{scaled_y}'"
+    )
 
 
 def build_filter_graph(options: ExportOptions, duration: float) -> str:
@@ -327,11 +511,7 @@ def build_filter_graph(options: ExportOptions, duration: float) -> str:
         else:
             raise MediaError("Removing that interval would leave no frames.")
 
-    processing = (
-        f"{source}crop={options.crop_width}:{options.crop_height}:"
-        f"{options.crop_x}:{options.crop_y},"
-        f"scale={options.output_width}:{options.output_height}:flags=lanczos"
-    )
+    processing = f"{source}{_crop_and_scale_filter(options, duration)}{_motion_crop_window_filter(options, duration)}"
     if options.output_format == "gif" and options.lossy_gif:
         processing += ",hqdn3d=1.5:1.5:6:6"
     filters.append(f"{processing},fps={options.fps}[prepared]")
@@ -527,12 +707,6 @@ MAX_FRAME_EDITOR_FRAMES = 900
 MAX_FRAME_EDITOR_OUTPUT_FRAMES = 18_000
 
 
-def _selected_output_duration(options: ExportOptions, duration: float) -> float:
-    if options.discard_middle:
-        return options.start + max(0, duration - options.end)
-    return max(0, options.end - options.start)
-
-
 def build_frame_extraction_graph(options: ExportOptions, duration: float) -> str:
     """Build the selected cut/crop/resize/FPS graph used by the visual frame editor."""
     filters: list[str] = []
@@ -556,9 +730,8 @@ def build_frame_extraction_graph(options: ExportOptions, duration: float) -> str
             raise MediaError("Removing that interval would leave no frames.")
 
     filters.append(
-        f"{source}crop={options.crop_width}:{options.crop_height}:"
-        f"{options.crop_x}:{options.crop_y},"
-        f"scale={options.output_width}:{options.output_height}:flags=lanczos,"
+        f"{source}{_crop_and_scale_filter(options, duration)}"
+        f"{_motion_crop_window_filter(options, duration)},"
         f"fps={options.fps}:eof_action=pass,format=rgba[outv]"
     )
     return ";".join(filters)
@@ -570,7 +743,7 @@ def extract_frame_sequence(
     options: ExportOptions,
 ) -> tuple[Path, ...]:
     """Extract every frame in the current working clip as a lossless local PNG."""
-    expected_frames = max(1, math.ceil(_selected_output_duration(options, source.duration) * options.fps))
+    expected_frames = max(1, math.ceil(_motion_crop_output_duration(options, source.duration) * options.fps))
     if expected_frames > MAX_FRAME_EDITOR_FRAMES:
         raise MediaError(
             f"The frame editor supports up to {MAX_FRAME_EDITOR_FRAMES} frames at once. "
@@ -613,6 +786,59 @@ def extract_frame_sequence(
             f"This selection produced more than {MAX_FRAME_EDITOR_FRAMES} frames. Shorten it or choose a lower FPS."
         )
     return frames
+
+
+_FRAME_CHANNEL_DELTA = 16
+_FRAME_CHANGED_PIXEL_RATIO = 0.03
+_FRAME_DIFF_LUT = [0 if value <= _FRAME_CHANNEL_DELTA else 255 for value in range(256)]
+
+
+def _frames_visually_equivalent(reference: Image.Image, candidate: Image.Image) -> bool:
+    if reference.size != candidate.size:
+        return False
+    difference = ImageChops.difference(reference, candidate)
+    bands = difference.split()
+    changed_mask = bands[0].point(_FRAME_DIFF_LUT)
+    for band in bands[1:]:
+        changed_mask = ImageChops.lighter(changed_mask, band.point(_FRAME_DIFF_LUT))
+    changed_pixels = changed_mask.histogram()[255]
+    allowed_changed_pixels = max(1, math.floor(reference.width * reference.height * _FRAME_CHANGED_PIXEL_RATIO))
+    return changed_pixels <= allowed_changed_pixels
+
+
+def _collapse_consecutive_frames(frames: tuple[Path, ...]) -> tuple[tuple[Path, ...], tuple[int, ...]]:
+    """Collapse visually unchanged runs while anchoring every comparison to the run's first frame."""
+    unique_frames: list[Path] = []
+    run_lengths: list[int] = []
+    run_reference: Image.Image | None = None
+    for frame in frames:
+        with Image.open(frame) as image:
+            candidate = image.convert("RGBA")
+            candidate.load()
+        if run_reference is not None and _frames_visually_equivalent(run_reference, candidate):
+            run_lengths[-1] += 1
+            candidate.close()
+        else:
+            if run_reference is not None:
+                run_reference.close()
+            unique_frames.append(frame)
+            run_lengths.append(1)
+            run_reference = candidate
+    if run_reference is not None:
+        run_reference.close()
+    collapsed_frames: list[Path] = []
+    holds: list[int] = []
+    for frame, run_length in zip(unique_frames, run_lengths, strict=True):
+        if run_length == 1:
+            collapsed_frames.append(frame)
+            holds.append(1)
+            continue
+        remaining = run_length
+        while remaining:
+            collapsed_frames.append(frame)
+            holds.append(min(300, remaining))
+            remaining -= holds[-1]
+    return tuple(collapsed_frames), tuple(holds)
 
 
 def _encode_ordered_frames_once(
@@ -921,6 +1147,7 @@ class MediaStore:
             duration=info.duration,
             kind=info.kind,
             mime=info.mime,
+            codec=info.codec,
         )
         with self._lock:
             self._assets[asset.id] = asset
@@ -945,7 +1172,8 @@ class MediaStore:
         with self._lock:
             sequence_id = uuid.uuid4().hex
             directory = self.frame_dir / sequence_id
-            frames = extract_frame_sequence(source, directory, options)
+            extracted_frames = extract_frame_sequence(source, directory, options)
+            frames, holds = _collapse_consecutive_frames(extracted_frames)
             sequence = FrameSequence(
                 id=sequence_id,
                 directory=directory,
@@ -954,6 +1182,7 @@ class MediaStore:
                 height=options.output_height,
                 fps=options.fps,
                 frames=frames,
+                holds=holds,
             )
             self._frame_sequences[sequence.id] = sequence
             return sequence
@@ -979,19 +1208,18 @@ class MediaStore:
     ) -> MediaAsset:
         if not isinstance(selection, list) or not selection:
             raise MediaError("Keep at least one frame before compiling the animation.")
-        if len(selection) > len(sequence.frames):
-            raise MediaError("The edited frame list contains more frames than the source sequence.")
+        if len(selection) > MAX_FRAME_EDITOR_FRAMES:
+            raise MediaError(f"The edited frame list can contain at most {MAX_FRAME_EDITOR_FRAMES} frame cards.")
 
         available = {path.stem: path for path in sequence.frames}
         ordered: list[tuple[Path, int]] = []
-        seen: set[str] = set()
         total_output_frames = 0
         for item in selection:
             if not isinstance(item, dict):
                 raise MediaError("The edited frame list is invalid.")
             frame_id = str(item.get("id") or "")
-            if frame_id not in available or frame_id in seen:
-                raise MediaError("The edited frame list contains an invalid or repeated frame.")
+            if frame_id not in available:
+                raise MediaError("The edited frame list contains an invalid frame.")
             try:
                 raw_hold = item.get("hold", 1)
                 hold = int(raw_hold)
@@ -1001,7 +1229,6 @@ class MediaStore:
                 raise MediaError("Each frame hold must be a whole number.") from exc
             if not 1 <= hold <= 300:
                 raise MediaError("Each frame hold must be between 1 and 300 ticks.")
-            seen.add(frame_id)
             ordered.append((available[frame_id], hold))
             total_output_frames += hold
         if total_output_frames > MAX_FRAME_EDITOR_OUTPUT_FRAMES:
@@ -1281,7 +1508,14 @@ def _download_with_ytdlp(
             )
 
     options: _Params = {
-        "format": "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best",
+        # Prefer H.264 when the source offers it because every supported desktop
+        # browser can decode it. Higher-ranked HEVC/AV1 variants remain valid
+        # fallbacks and are transcoded lazily for the in-browser preview.
+        "format": (
+            "bestvideo[ext=mp4][vcodec^=avc]/bestvideo[ext=mp4][vcodec^=h264]/"
+            "best[ext=mp4][vcodec^=avc]/best[ext=mp4][vcodec^=h264]/"
+            "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
+        ),
         "outtmpl": template,
         "noplaylist": True,
         "quiet": True,

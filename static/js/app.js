@@ -4,6 +4,8 @@
   const token = document.querySelector('meta[name="gifmaker-athome-token"]').content;
   const browserSessionId = document.querySelector('meta[name="gifmaker-athome-browser-session"]').content;
   const $ = (id) => document.getElementById(id);
+  const MAX_MOTION_CROP_KEYFRAMES = 10;
+  const MAX_FRAME_EDITOR_CARDS = 900;
   const elements = {
     hero: $("heroSection"), importPanel: $("importPanel"), loading: $("loadingPanel"),
     loadingTitle: $("loadingTitle"), loadingDetail: $("loadingDetail"),
@@ -13,8 +15,14 @@
     linkInput: $("linkInput"), importLinkButton: $("importLinkButton"), mediaName: $("mediaName"),
     mediaMeta: $("mediaMeta"), stage: $("mediaStage"), video: $("videoPreview"),
     image: $("imagePreview"), previewError: $("previewError"), cropBox: $("cropBox"),
-    cropSize: $("cropSize"), startRange: $("startRange"), endRange: $("endRange"),
+    cropSize: $("cropSize"), currentTimestamp: $("currentTimestamp"),
+    motionCropBar: $("motionCropBar"), motionCropEnabled: $("motionCropEnabled"),
+    motionCropKeyframes: $("motionCropKeyframes"), addMotionCropKeyframe: $("addMotionCropKeyframe"),
+    removeMotionCropKeyframe: $("removeMotionCropKeyframe"), motionCropTiming: $("motionCropTiming"),
+    motionCropHint: $("motionCropHint"),
+    startRange: $("startRange"), endRange: $("endRange"),
     startNumber: $("startNumber"), endNumber: $("endNumber"), rangeFill: $("rangeFill"),
+    motionTimelineMarkers: $("motionTimelineMarkers"),
     selectedDuration: $("selectedDuration"), totalDurationLabel: $("totalDurationLabel"),
     modeHint: $("modeHint"), previewSelectionButton: $("previewSelectionButton"),
     openFrameEditorButton: $("openFrameEditorButton"), frameEditorPanel: $("frameEditorPanel"),
@@ -48,6 +56,11 @@
     asset: null,
     crop: { x: 0, y: 0, w: 100, h: 100 },
     cropAspect: null,
+    motionCropEnabled: false,
+    motionCropIndex: 0,
+    motionCropKeyframes: [],
+    motionCropTimings: [],
+    motionTimelineDrag: null,
     dimensionLocked: true,
     previewing: false,
     discardJumped: false,
@@ -64,6 +77,7 @@
     originalFrameItems: [],
     frameSignature: "",
     draggedFrameId: null,
+    frameInstanceSerial: 0,
     frameEditorBusy: false
   };
 
@@ -157,6 +171,23 @@
     return `${minutes}:${String(remainder).padStart(2, "0")}`;
   }
 
+  function formatTimestamp(seconds) {
+    const safe = Math.max(0, Number(seconds) || 0);
+    const totalCentiseconds = Math.round(safe * 100);
+    const wholeSeconds = Math.floor(totalCentiseconds / 100);
+    const minutes = Math.floor(wholeSeconds / 60);
+    const remainder = wholeSeconds % 60;
+    const centiseconds = totalCentiseconds % 100;
+    const precise = `${String(remainder).padStart(2, "0")}.${String(centiseconds).padStart(2, "0")}`;
+    const hours = Math.floor(minutes / 60);
+    if (hours) return `${hours}:${String(minutes % 60).padStart(2, "0")}:${precise}`;
+    return `${minutes}:${precise}`;
+  }
+
+  function updatePreviewTimestamp(seconds = elements.video.currentTime) {
+    elements.currentTimestamp.textContent = formatTimestamp(seconds);
+  }
+
   function readableBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes <= 0) return "";
     const units = ["B", "KB", "MB", "GB"];
@@ -184,6 +215,14 @@
     return isDiscardMode() ? start + Math.max(0, state.asset.duration - end) : Math.max(0, end - start);
   }
 
+  function finalOutputDuration() {
+    const duration = outputDuration();
+    if (!state.motionCropEnabled || !state.motionCropTimings.length) return duration;
+    const first = state.motionCropTimings[0];
+    const last = state.motionCropTimings[state.motionCropTimings.length - 1];
+    return duration * Math.max(0, last - first);
+  }
+
   function updateTimeline() {
     if (!state.asset) return;
     const duration = state.asset.duration;
@@ -194,11 +233,14 @@
     const endPct = (end / duration) * 100;
     elements.rangeFill.style.left = `${startPct}%`;
     elements.rangeFill.style.width = `${Math.max(0, endPct - startPct)}%`;
-    const resultDuration = outputDuration();
+    const resultDuration = finalOutputDuration();
     elements.selectedDuration.textContent = `${resultDuration.toFixed(2)}s output`;
     elements.modeHint.textContent = isDiscardMode()
       ? `The ${Math.max(0, end - start).toFixed(2)}s middle interval is removed; both outer parts are joined.`
       : "Only the selected interval becomes the animation.";
+    if (state.motionCropEnabled) {
+      updateMotionCropControls();
+    }
     updateOutputSummary();
   }
 
@@ -220,12 +262,27 @@
     }
   }
 
-  function cropPixels() {
+  function cloneCrop(crop) {
+    return { x: crop.x, y: crop.y, w: crop.w, h: crop.h };
+  }
+
+  function fitCrop(crop) {
+    const width = Math.max(4, Math.min(100, crop.w));
+    const height = Math.max(4, Math.min(100, crop.h));
+    return {
+      x: Math.max(0, Math.min(100 - width, crop.x)),
+      y: Math.max(0, Math.min(100 - height, crop.y)),
+      w: width,
+      h: height
+    };
+  }
+
+  function cropPixels(crop = state.crop) {
     if (!state.asset) return { x: 0, y: 0, w: 1, h: 1 };
-    const x = Math.round(state.asset.width * state.crop.x / 100);
-    const y = Math.round(state.asset.height * state.crop.y / 100);
-    const right = Math.round(state.asset.width * (state.crop.x + state.crop.w) / 100);
-    const bottom = Math.round(state.asset.height * (state.crop.y + state.crop.h) / 100);
+    const x = Math.round(state.asset.width * crop.x / 100);
+    const y = Math.round(state.asset.height * crop.y / 100);
+    const right = Math.round(state.asset.width * (crop.x + crop.w) / 100);
+    const bottom = Math.round(state.asset.height * (crop.y + crop.h) / 100);
     return {
       x: Math.min(x, state.asset.width - 1),
       y: Math.min(y, state.asset.height - 1),
@@ -234,9 +291,14 @@
     };
   }
 
-  function renderCrop() {
+  function outputReferenceCropPixels() {
+    const crop =
+      state.motionCropEnabled && state.motionCropKeyframes.length ? state.motionCropKeyframes[0] : state.crop;
+    return cropPixels(crop);
+  }
+
+  function paintCrop(crop) {
     if (!state.asset) return;
-    const crop = state.crop;
     Object.assign(elements.cropBox.style, {
       left: `${crop.x}%`, top: `${crop.y}%`, width: `${crop.w}%`, height: `${crop.h}%`
     });
@@ -245,9 +307,244 @@
     Object.assign(bottom.style, { left: "0", top: `${crop.y + crop.h}%`, width: "100%", height: `${100 - crop.y - crop.h}%` });
     Object.assign(left.style, { left: "0", top: `${crop.y}%`, width: `${crop.x}%`, height: `${crop.h}%` });
     Object.assign(right.style, { left: `${crop.x + crop.w}%`, top: `${crop.y}%`, width: `${100 - crop.x - crop.w}%`, height: `${crop.h}%` });
-    const pixels = cropPixels();
+    const pixels = cropPixels(crop);
     elements.cropSize.textContent = `${pixels.w} × ${pixels.h}`;
+  }
+
+  function renderCrop() {
+    paintCrop(state.crop);
     syncResolutionFromCrop();
+  }
+
+  function syncMotionCropKeyframe() {
+    if (!state.motionCropEnabled) return;
+    const active = fitCrop(state.crop);
+    state.crop = active;
+    state.motionCropKeyframes[state.motionCropIndex] = cloneCrop(active);
+  }
+
+  function renderMotionTimelineMarkers() {
+    elements.motionTimelineMarkers.replaceChildren();
+    elements.motionTimelineMarkers.hidden = !state.motionCropEnabled;
+    if (!state.motionCropEnabled || !state.asset) return;
+    state.motionCropTimings.forEach((progress, index) => {
+      const sourceTime = motionCropSourceTime(progress);
+      const marker = document.createElement("button");
+      marker.type = "button";
+      const active = index === state.motionCropIndex;
+      const dragging = active && state.motionTimelineDrag?.index === index;
+      marker.className = `motion-timeline-marker${active ? " active" : ""}${dragging ? " dragging" : ""}`;
+      marker.dataset.motionCropIndex = String(index);
+      marker.style.left = `${Math.max(0, Math.min(100, sourceTime / state.asset.duration * 100))}%`;
+      marker.textContent = String(index + 1);
+      marker.title = active
+        ? `Drag position ${index + 1} to change its timing (${formatTimestamp(sourceTime)})`
+        : `Select motion position ${index + 1} at ${formatTimestamp(sourceTime)}`;
+      marker.setAttribute("aria-label", marker.title);
+      marker.setAttribute("aria-current", String(active));
+      elements.motionTimelineMarkers.append(marker);
+    });
+  }
+
+  function updateMotionCropControls() {
+    const enabled = state.motionCropEnabled;
+    elements.motionCropEnabled.checked = enabled;
+    elements.startRange.hidden = enabled;
+    elements.endRange.hidden = enabled;
+    elements.motionCropKeyframes.replaceChildren();
+    state.motionCropKeyframes.forEach((_crop, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `motion-keyframe${enabled && index === state.motionCropIndex ? " active" : ""}`;
+      button.dataset.motionCropIndex = String(index);
+      button.disabled = !enabled;
+      const number = index + 1;
+      button.textContent = String(number);
+      button.setAttribute("aria-label", `Edit motion crop position ${number}`);
+      button.setAttribute("aria-pressed", String(enabled && index === state.motionCropIndex));
+      elements.motionCropKeyframes.append(button);
+    });
+    elements.addMotionCropKeyframe.disabled =
+      !enabled || state.motionCropKeyframes.length >= MAX_MOTION_CROP_KEYFRAMES;
+    elements.removeMotionCropKeyframe.disabled =
+      !enabled || state.motionCropKeyframes.length <= 1;
+    const duration = outputDuration();
+    const progress = state.motionCropTimings[state.motionCropIndex] || 0;
+    elements.motionCropTiming.value = (progress * duration).toFixed(2);
+    elements.motionCropTiming.max = duration.toFixed(3);
+    elements.motionCropTiming.disabled = !enabled;
+    elements.motionCropHint.textContent = !enabled
+      ? "Turn on to add up to 10 pan and zoom positions."
+      : state.motionCropKeyframes.length === 1
+        ? "Set position 1, then add another position to create motion."
+        : `Position ${state.motionCropIndex + 1} of ${state.motionCropKeyframes.length}. ` +
+          "Edit its crop above, or drag its highlighted timeline number. New positions continue from the latest.";
+    renderMotionTimelineMarkers();
+  }
+
+  function motionCropSourceTime(progress) {
+    const { start, end } = selectedTimes();
+    const outputTime = progress * outputDuration();
+    const sourceTime = isDiscardMode()
+      ? outputTime <= start ? outputTime : end + outputTime - start
+      : start + outputTime;
+    return Math.max(0, Math.min(state.asset.duration, sourceTime));
+  }
+
+  function motionCropKeyframeTime(index) {
+    const progress = state.motionCropTimings[index] || 0;
+    return Math.min(Math.max(0, state.asset.duration - 0.02), motionCropSourceTime(progress));
+  }
+
+  function selectMotionCropKeyframe(index, seek = true) {
+    if (!state.motionCropEnabled) return;
+    if (state.previewing) stopPreviewCut();
+    state.motionCropIndex = Math.max(0, Math.min(state.motionCropKeyframes.length - 1, index));
+    state.crop = cloneCrop(state.motionCropKeyframes[state.motionCropIndex] || state.crop);
+    updateMotionCropControls();
+    renderCrop();
+    const keyframeTime = motionCropKeyframeTime(state.motionCropIndex);
+    if (seek && state.asset?.kind === "video" && elements.video.readyState > 0) {
+      elements.video.currentTime = keyframeTime;
+    }
+  }
+
+  function setMotionCropEnabled(enabled) {
+    if (state.previewing) stopPreviewCut();
+    state.motionTimelineDrag = null;
+    state.motionCropEnabled = enabled;
+    if (enabled) {
+      state.motionCropKeyframes = [cloneCrop(state.crop)];
+      state.motionCropTimings = [0];
+      state.motionCropIndex = 0;
+      selectMotionCropKeyframe(0);
+    } else {
+      state.motionCropKeyframes = [];
+      state.motionCropTimings = [];
+      state.motionCropIndex = 0;
+      updateMotionCropControls();
+      renderCrop();
+    }
+    updateTimeline();
+  }
+
+  function interpolateCrop(start, end, progress) {
+    return {
+      x: start.x + (end.x - start.x) * progress,
+      y: start.y + (end.y - start.y) * progress,
+      w: start.w + (end.w - start.w) * progress,
+      h: start.h + (end.h - start.h) * progress
+    };
+  }
+
+  function addMotionCropKeyframe() {
+    if (!state.motionCropEnabled || state.motionCropKeyframes.length >= MAX_MOTION_CROP_KEYFRAMES) return;
+    const previousIndex = state.motionCropKeyframes.length - 1;
+    state.motionCropKeyframes.push(cloneCrop(state.motionCropKeyframes[previousIndex]));
+    state.motionCropTimings.push(state.motionCropTimings[previousIndex]);
+    selectMotionCropKeyframe(previousIndex + 1);
+    updateTimeline();
+  }
+
+  function removeMotionCropKeyframe() {
+    if (!state.motionCropEnabled || state.motionCropKeyframes.length <= 1) return;
+    state.motionCropKeyframes.splice(state.motionCropIndex, 1);
+    state.motionCropTimings.splice(state.motionCropIndex, 1);
+    selectMotionCropKeyframe(Math.min(state.motionCropIndex, state.motionCropKeyframes.length - 1));
+    updateTimeline();
+  }
+
+  function setMotionCropTiming(seconds) {
+    const index = state.motionCropIndex;
+    if (!state.motionCropEnabled) return;
+    const duration = outputDuration();
+    if (duration <= 0) return;
+    const requestedSeconds = Number(seconds);
+    if (!String(seconds).trim() || !Number.isFinite(requestedSeconds)) {
+      updateMotionCropControls();
+      return;
+    }
+    const minimum = index > 0 ? state.motionCropTimings[index - 1] : 0;
+    const maximum = index < state.motionCropKeyframes.length - 1
+      ? state.motionCropTimings[index + 1]
+      : 1;
+    state.motionCropTimings[index] = Math.max(minimum, Math.min(maximum, requestedSeconds / duration));
+    updateTimeline();
+    const keyframeTime = motionCropKeyframeTime(index);
+    if (state.asset?.kind === "video" && elements.video.readyState > 0) {
+      elements.video.currentTime = keyframeTime;
+    }
+  }
+
+  function motionCropProgress(sourceTime) {
+    const { start, end } = selectedTimes();
+    const duration = outputDuration();
+    if (duration <= 0) return 0;
+    let outputTime;
+    if (isDiscardMode()) {
+      if (sourceTime <= start) outputTime = sourceTime;
+      else if (sourceTime >= end) outputTime = start + sourceTime - end;
+      else outputTime = start;
+    } else {
+      outputTime = sourceTime - start;
+    }
+    return Math.max(0, Math.min(1, outputTime / duration));
+  }
+
+  function setMotionCropTimingFromPointer(event) {
+    const drag = state.motionTimelineDrag;
+    if (
+      !drag ||
+      drag.pointerId !== event.pointerId ||
+      drag.index !== state.motionCropIndex ||
+      !state.asset
+    ) return;
+    const bounds = elements.motionTimelineMarkers.getBoundingClientRect();
+    if (bounds.width <= 0) return;
+    const timelineProgress = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+    const sourceTime = timelineProgress * state.asset.duration;
+    setMotionCropTiming(motionCropProgress(sourceTime) * outputDuration());
+  }
+
+  function finishMotionTimelineDrag(event) {
+    if (!state.motionTimelineDrag || state.motionTimelineDrag.pointerId !== event.pointerId) return;
+    state.motionTimelineDrag = null;
+    if (elements.motionTimelineMarkers.hasPointerCapture(event.pointerId)) {
+      elements.motionTimelineMarkers.releasePointerCapture(event.pointerId);
+    }
+    renderMotionTimelineMarkers();
+  }
+
+  function updateMotionCropPreview() {
+    if (!state.motionCropEnabled || !state.previewing || state.motionCropKeyframes.length < 2) return;
+    const progress = motionCropProgress(elements.video.currentTime);
+    if (progress <= state.motionCropTimings[0]) {
+      paintCrop(state.motionCropKeyframes[0]);
+      return;
+    }
+    const lastIndex = state.motionCropTimings.length - 1;
+    if (progress >= state.motionCropTimings[lastIndex]) {
+      paintCrop(state.motionCropKeyframes[lastIndex]);
+      return;
+    }
+    let endIndex = state.motionCropTimings.findIndex((timing, index) => index > 0 && progress <= timing);
+    if (endIndex < 0) endIndex = lastIndex;
+    const startIndex = Math.max(0, endIndex - 1);
+    const segmentDuration = state.motionCropTimings[endIndex] - state.motionCropTimings[startIndex];
+    const localProgress = segmentDuration > 0
+      ? (progress - state.motionCropTimings[startIndex]) / segmentDuration
+      : 0;
+    paintCrop(interpolateCrop(
+      state.motionCropKeyframes[startIndex],
+      state.motionCropKeyframes[startIndex + 1],
+      localProgress
+    ));
+  }
+
+  function restoreMotionCropEditor() {
+    if (!state.motionCropEnabled) return;
+    state.crop = cloneCrop(state.motionCropKeyframes[state.motionCropIndex] || state.crop);
+    renderCrop();
   }
 
   function applyCropAspect(value) {
@@ -276,6 +573,7 @@
       w: width,
       h: height
     };
+    syncMotionCropKeyframe();
     renderCrop();
   }
 
@@ -303,7 +601,7 @@
   }
 
   function onCropPointerDown(event) {
-    if (!state.asset) return;
+    if (!state.asset || state.previewing) return;
     event.preventDefault();
     elements.cropBox.setPointerCapture(event.pointerId);
     const rect = elements.stage.getBoundingClientRect();
@@ -347,6 +645,7 @@
       let bottom = fromTop ? farY : Math.max(original.y + min, Math.min(100, farY + dy));
       state.crop = { x, y, w: right - x, h: bottom - y };
     }
+    syncMotionCropKeyframe();
     renderCrop();
   }
 
@@ -356,7 +655,7 @@
 
   function syncResolutionFromCrop() {
     if (!state.asset) return;
-    const crop = cropPixels();
+    const crop = outputReferenceCropPixels();
     const mode = elements.resolutionSelect.value;
     if (mode !== "custom") {
       const squarePreset = mode === "512square";
@@ -386,13 +685,13 @@
 
   function updateOutputSummary() {
     if (!state.asset) return;
-    const width = Number(elements.outputWidth.value) || cropPixels().w;
-    const height = Number(elements.outputHeight.value) || cropPixels().h;
+    const width = Number(elements.outputWidth.value) || outputReferenceCropPixels().w;
+    const height = Number(elements.outputHeight.value) || outputReferenceCropPixels().h;
     const paletteBased = elements.outputFormat.value === "gif";
     elements.outputSummary.textContent = `${elements.outputFormat.value.toUpperCase()} · ${width} × ${height} · ${elements.fpsSelect.value} FPS`;
     const detail = paletteBased
-      ? `${outputDuration().toFixed(2)} seconds · ${elements.colorsSelect.value} colors`
-      : `${outputDuration().toFixed(2)} seconds · quality ${elements.qualitySelect.value}`;
+      ? `${finalOutputDuration().toFixed(2)} seconds · ${elements.colorsSelect.value} colors`
+      : `${finalOutputDuration().toFixed(2)} seconds · quality ${elements.qualitySelect.value}`;
     const cap = selectedSizeCap();
     const techniqueCount = elements.outputFormat.value === "gif"
       ? gifTechniqueInputs().filter((input) => input.checked).length
@@ -452,6 +751,11 @@
     state.loopExtended = false;
     state.crop = { x: 0, y: 0, w: 100, h: 100 };
     state.cropAspect = null;
+    state.motionCropEnabled = false;
+    state.motionCropIndex = 0;
+    state.motionCropKeyframes = [];
+    state.motionCropTimings = [];
+    state.motionTimelineDrag = null;
     state.previewFallbackTried = false;
     state.previewing = false;
     elements.previewError.hidden = true;
@@ -464,15 +768,28 @@
     elements.image.removeAttribute("src");
     elements.video.hidden = asset.kind !== "video";
     elements.image.hidden = asset.kind === "video";
+    elements.currentTimestamp.hidden = asset.kind !== "video";
+    elements.motionCropBar.hidden = asset.kind !== "video";
+    updateMotionCropControls();
+    updatePreviewTimestamp(0);
     if (asset.kind === "video") {
-      elements.video.src = asset.media_url;
-      elements.video.load();
+      if (asset.browser_preview_required) {
+        void createFallbackPreview();
+      } else {
+        elements.video.src = asset.media_url;
+        elements.video.load();
+      }
     } else {
       elements.image.src = asset.media_url;
     }
 
     const duration = asset.duration;
-    for (const input of [elements.startRange, elements.endRange, elements.startNumber, elements.endNumber]) {
+    for (const input of [
+      elements.startRange,
+      elements.endRange,
+      elements.startNumber,
+      elements.endNumber
+    ]) {
       input.max = duration.toFixed(3);
     }
     elements.startRange.value = "0";
@@ -538,22 +855,28 @@
   }
 
   async function createFallbackPreview() {
-    if (!state.asset || state.previewFallbackTried || state.asset.kind !== "video") return;
+    const asset = state.asset;
+    if (!asset || state.previewFallbackTried || asset.kind !== "video") return;
     state.previewFallbackTried = true;
     elements.previewError.textContent = "This format is not browser-native. Creating a local compatibility preview…";
     elements.previewError.hidden = false;
     try {
-      const data = await api(`/api/media/${state.asset.id}/preview`, { method: "POST" });
+      const data = await api(`/api/media/${asset.id}/preview`, { method: "POST" });
+      if (!state.asset || state.asset.id !== asset.id) return;
       elements.video.src = data.preview_url;
       elements.video.load();
       elements.previewError.hidden = true;
     } catch (error) {
+      if (!state.asset || state.asset.id !== asset.id) return;
       elements.previewError.textContent = error.message;
     }
   }
 
   function sourceEditPayload() {
-    const crop = cropPixels();
+    const keyframeCrops = state.motionCropEnabled ? state.motionCropKeyframes : [state.crop];
+    const pixelKeyframes = keyframeCrops.map((crop) => cropPixels(crop));
+    const crop = pixelKeyframes[0];
+    const lastCrop = pixelKeyframes[pixelKeyframes.length - 1];
     const { start, end } = selectedTimes();
     return {
       media_id: state.asset.id,
@@ -564,6 +887,18 @@
       crop_y: crop.y,
       crop_width: crop.w,
       crop_height: crop.h,
+      motion_crop: state.motionCropEnabled,
+      crop_end_x: lastCrop.x,
+      crop_end_y: lastCrop.y,
+      motion_crop_keyframes: state.motionCropEnabled
+        ? pixelKeyframes.map((keyframe, index) => ({
+            x: keyframe.x,
+            y: keyframe.y,
+            width: keyframe.w,
+            height: keyframe.h,
+            progress: state.motionCropTimings[index]
+          }))
+        : [],
       output_width: Number(elements.outputWidth.value),
       output_height: Number(elements.outputHeight.value),
       output_format: elements.outputFormat.value,
@@ -584,6 +919,25 @@
     };
   }
 
+  function hasCompleteMotionCrop() {
+    return !state.motionCropEnabled || state.motionCropKeyframes.length >= 2;
+  }
+
+  function requireCompleteMotionCrop() {
+    if (!hasCompleteMotionCrop()) {
+      showToast("Add another position to finish the motion crop.");
+      return false;
+    }
+    if (
+      state.motionCropEnabled &&
+      state.motionCropTimings[state.motionCropTimings.length - 1] <= state.motionCropTimings[0]
+    ) {
+      showToast("Move the last position later than the first position.");
+      return false;
+    }
+    return true;
+  }
+
   function currentFrameSignature() {
     if (!state.asset) return "";
     const payload = sourceEditPayload();
@@ -597,6 +951,7 @@
     state.originalFrameItems = [];
     state.frameSignature = "";
     state.draggedFrameId = null;
+    state.frameInstanceSerial = 0;
     state.frameEditorBusy = false;
     elements.frameGrid.replaceChildren();
     elements.frameEditorPanel.hidden = true;
@@ -635,7 +990,7 @@
     const supported = format === "gif" || format === "webm";
     const formatName = format === "gif" ? "GIF" : format === "webm" ? "WebM" : "GIF or WebM";
     elements.frameEditorSummary.textContent =
-      `${state.frameItems.length} of ${state.originalFrameItems.length} frames kept · ` +
+      `${state.frameItems.length} frame cards · ` +
       `${totalTicks} hold ticks · ${duration.toFixed(2)}s at ${state.frameSequence.fps} FPS.`;
     elements.frameEditorStatus.className = `frame-editor-status${stale || !supported ? " stale" : ""}`;
     if (stale) {
@@ -643,11 +998,18 @@
     } else if (!supported) {
       elements.frameEditorStatus.textContent = "Choose GIF or WebM in Export settings to compile edited frames.";
     } else {
-      elements.frameEditorStatus.textContent = "Drag cards into any order. Increase Hold to keep a frame onscreen for multiple FPS ticks.";
+      elements.frameEditorStatus.textContent =
+        "Drag cards into any order, duplicate or delete any card, and adjust its Hold ticks.";
     }
     elements.exportFramesButton.textContent = `Compile edited ${formatName}`;
     elements.exportFramesButton.disabled = state.frameEditorBusy || stale || !supported || !state.frameItems.length;
     elements.resetFramesButton.disabled = state.frameEditorBusy;
+  }
+
+  function createFrameItem(frame) {
+    state.frameInstanceSerial += 1;
+    const hold = Math.max(1, Math.min(300, Math.round(Number(frame.hold) || 1)));
+    return { ...frame, hold, instanceId: `frame-item-${state.frameInstanceSerial}` };
   }
 
   function renderFrameGrid() {
@@ -656,7 +1018,7 @@
       const card = document.createElement("article");
       card.className = "frame-card";
       card.draggable = true;
-      card.dataset.frameId = frame.id;
+      card.dataset.frameId = frame.instanceId;
       card.setAttribute("aria-label", `Frame ${index + 1}. Drag to reorder.`);
 
       const thumbnail = document.createElement("div");
@@ -669,13 +1031,24 @@
       const number = document.createElement("span");
       number.className = "frame-number";
       number.textContent = String(index + 1);
+      const actions = document.createElement("div");
+      actions.className = "frame-thumb-actions";
+      const duplicate = document.createElement("button");
+      duplicate.className = "duplicate-frame-button";
+      duplicate.type = "button";
+      duplicate.dataset.duplicateFrame = frame.instanceId;
+      duplicate.setAttribute("aria-label", `Duplicate frame ${index + 1}`);
+      duplicate.title = "Duplicate frame";
+      duplicate.textContent = "⧉";
       const remove = document.createElement("button");
       remove.className = "delete-frame-button";
       remove.type = "button";
-      remove.dataset.deleteFrame = frame.id;
+      remove.dataset.deleteFrame = frame.instanceId;
       remove.setAttribute("aria-label", `Delete frame ${index + 1}`);
+      remove.title = "Delete frame";
       remove.textContent = "×";
-      thumbnail.append(image, number, remove);
+      actions.append(duplicate, remove);
+      thumbnail.append(image, number, actions);
 
       const controls = document.createElement("div");
       controls.className = "frame-controls";
@@ -690,7 +1063,7 @@
       hold.max = "300";
       hold.step = "1";
       hold.value = String(frame.hold);
-      hold.dataset.holdFrame = frame.id;
+      hold.dataset.holdFrame = frame.instanceId;
       hold.setAttribute("aria-label", `Hold ticks for frame ${index + 1}`);
       const ticks = document.createElement("i");
       ticks.textContent = frame.hold === 1 ? "tick" : "ticks";
@@ -710,11 +1083,12 @@
 
   async function openFrameEditor() {
     if (!state.asset || state.frameEditorBusy) return;
+    if (!requireCompleteMotionCrop()) return;
     if (!["gif", "webm"].includes(elements.outputFormat.value)) {
       showToast("Choose GIF or WebM before opening the frame editor.");
       return;
     }
-    const estimatedFrames = Math.ceil(outputDuration() * Number(elements.fpsSelect.value));
+    const estimatedFrames = Math.ceil(finalOutputDuration() * Number(elements.fpsSelect.value));
     if (estimatedFrames > 900) {
       showToast("The frame editor supports up to 900 frames. Shorten the duration or lower the FPS.");
       return;
@@ -737,7 +1111,7 @@
         body: JSON.stringify(sourceEditPayload())
       });
       state.frameSequence = data.sequence;
-      state.frameItems = data.sequence.frames.map((frame) => ({ ...frame, hold: 1 }));
+      state.frameItems = data.sequence.frames.map(createFrameItem);
       state.originalFrameItems = state.frameItems.map((frame) => ({ ...frame }));
       state.frameSignature = requestSignature;
       renderFrameGrid();
@@ -824,6 +1198,7 @@
 
   async function exportAnimation() {
     if (!state.asset) return;
+    if (!requireCompleteMotionCrop()) return;
     const sizeCap = selectedSizeCap();
     if (sizeCap !== null && (!Number.isInteger(sizeCap) || sizeCap < 16 || sizeCap > 1048576)) {
       showToast("Choose a file-size cap between 16 KB and 1 GB.");
@@ -964,6 +1339,13 @@
     }
   }
 
+  function stopPreviewCut() {
+    elements.video.pause();
+    state.previewing = false;
+    elements.previewSelectionButton.textContent = "▶ Preview cut";
+    restoreMotionCropEditor();
+  }
+
   function previewCut() {
     if (!state.asset) return;
     if (state.asset.kind !== "video") {
@@ -971,43 +1353,57 @@
       return;
     }
     if (state.previewing) {
-      elements.video.pause();
-      state.previewing = false;
-      elements.previewSelectionButton.textContent = "▶ Preview cut";
+      stopPreviewCut();
       return;
     }
     const { start, end } = selectedTimes();
     state.previewing = true;
     state.discardJumped = false;
-    elements.video.currentTime = isDiscardMode() ? 0 : start;
+    let previewStart = state.motionCropEnabled
+      ? motionCropSourceTime(state.motionCropTimings[0])
+      : isDiscardMode() ? 0 : start;
+    if (isDiscardMode() && previewStart >= start) {
+      if (previewStart < end) previewStart = end;
+      state.discardJumped = true;
+    }
+    elements.video.currentTime = previewStart;
     elements.previewSelectionButton.textContent = "■ Stop preview";
+    updateMotionCropPreview();
     elements.video.play().catch(() => {
-      state.previewing = false;
-      elements.previewSelectionButton.textContent = "▶ Preview cut";
+      stopPreviewCut();
     });
-    if (isDiscardMode() && start <= minimumGap()) {
+    if (!state.motionCropEnabled && isDiscardMode() && start <= minimumGap()) {
       elements.video.currentTime = end;
       state.discardJumped = true;
     }
   }
 
+  for (const eventName of ["loadedmetadata", "seeking", "seeked", "timeupdate"]) {
+    elements.video.addEventListener(eventName, () => {
+      updatePreviewTimestamp();
+    });
+  }
+
   elements.video.addEventListener("timeupdate", () => {
     if (!state.previewing || !state.asset) return;
+    updateMotionCropPreview();
     const { start, end } = selectedTimes();
+    const lastMotionTiming = state.motionCropTimings[state.motionCropTimings.length - 1];
+    const finish = state.motionCropEnabled
+      ? motionCropSourceTime(lastMotionTiming)
+      : isDiscardMode() ? state.asset.duration : end;
+    if (elements.video.currentTime >= finish - 0.015) {
+      stopPreviewCut();
+      return;
+    }
     if (isDiscardMode() && !state.discardJumped && elements.video.currentTime >= start) {
       state.discardJumped = true;
       elements.video.currentTime = end;
       return;
     }
-    const finish = isDiscardMode() ? state.asset.duration : end;
-    if (elements.video.currentTime >= finish - 0.015) {
-      elements.video.pause();
-      state.previewing = false;
-      elements.previewSelectionButton.textContent = "▶ Preview cut";
-    }
   });
 
-  elements.video.addEventListener("error", createFallbackPreview);
+  elements.video.addEventListener("error", () => { void createFallbackPreview(); });
   elements.toastClose.addEventListener("click", hideToast);
   document.querySelectorAll(".source-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -1065,20 +1461,36 @@
   elements.exportFramesButton.addEventListener("click", exportEditedFrames);
 
   elements.frameGrid.addEventListener("click", (event) => {
+    const duplicate = event.target.closest("[data-duplicate-frame]");
+    if (duplicate && !state.frameEditorBusy) {
+      if (state.frameItems.length >= MAX_FRAME_EDITOR_CARDS) {
+        showToast(`The frame editor supports up to ${MAX_FRAME_EDITOR_CARDS} frame cards.`);
+        return;
+      }
+      const index = state.frameItems.findIndex(
+        (frame) => frame.instanceId === duplicate.dataset.duplicateFrame
+      );
+      if (index < 0) return;
+      state.frameItems.splice(index + 1, 0, createFrameItem(state.frameItems[index]));
+      renderFrameGrid();
+      return;
+    }
     const button = event.target.closest("[data-delete-frame]");
     if (!button || state.frameEditorBusy) return;
     if (state.frameItems.length <= 1) {
       showToast("Keep at least one frame in the animation.");
       return;
     }
-    state.frameItems = state.frameItems.filter((frame) => frame.id !== button.dataset.deleteFrame);
+    state.frameItems = state.frameItems.filter(
+      (frame) => frame.instanceId !== button.dataset.deleteFrame
+    );
     renderFrameGrid();
   });
 
   elements.frameGrid.addEventListener("input", (event) => {
     const input = event.target.closest("[data-hold-frame]");
     if (!input || state.frameEditorBusy) return;
-    const frame = state.frameItems.find((item) => item.id === input.dataset.holdFrame);
+    const frame = state.frameItems.find((item) => item.instanceId === input.dataset.holdFrame);
     const hold = Math.max(1, Math.min(300, Math.round(Number(input.value) || 1)));
     if (!frame) return;
     frame.hold = hold;
@@ -1110,17 +1522,19 @@
     if (!state.draggedFrameId) return;
     event.preventDefault();
     const target = event.target.closest(".frame-card");
-    const fromIndex = state.frameItems.findIndex((frame) => frame.id === state.draggedFrameId);
+    const fromIndex = state.frameItems.findIndex((frame) => frame.instanceId === state.draggedFrameId);
     if (fromIndex < 0) return;
     const [moved] = state.frameItems.splice(fromIndex, 1);
-    if (!target || target.dataset.frameId === moved.id) {
+    if (!target || target.dataset.frameId === moved.instanceId) {
       state.frameItems.push(moved);
     } else {
       const rect = target.getBoundingClientRect();
       const sameRow = event.clientY >= rect.top && event.clientY <= rect.bottom;
       const after = event.clientY > rect.top + rect.height / 2 ||
         (sameRow && event.clientX > rect.left + rect.width / 2);
-      const targetIndex = state.frameItems.findIndex((frame) => frame.id === target.dataset.frameId);
+      const targetIndex = state.frameItems.findIndex(
+        (frame) => frame.instanceId === target.dataset.frameId
+      );
       state.frameItems.splice(Math.max(0, targetIndex + (after ? 1 : 0)), 0, moved);
     }
     state.draggedFrameId = null;
@@ -1136,6 +1550,38 @@
 
   document.querySelectorAll("[data-aspect]").forEach((button) => {
     button.addEventListener("click", () => applyCropAspect(button.dataset.aspect));
+  });
+  elements.motionCropEnabled.addEventListener("change", () => {
+    setMotionCropEnabled(elements.motionCropEnabled.checked);
+  });
+  elements.motionCropKeyframes.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-motion-crop-index]");
+    if (button) selectMotionCropKeyframe(Number(button.dataset.motionCropIndex));
+  });
+  elements.motionTimelineMarkers.addEventListener("click", (event) => {
+    const marker = event.target.closest("[data-motion-crop-index]");
+    if (marker) selectMotionCropKeyframe(Number(marker.dataset.motionCropIndex));
+  });
+  elements.motionTimelineMarkers.addEventListener("pointerdown", (event) => {
+    const marker = event.target.closest("[data-motion-crop-index]");
+    if (!marker || event.button !== 0) return;
+    const index = Number(marker.dataset.motionCropIndex);
+    if (index !== state.motionCropIndex) return;
+    event.preventDefault();
+    if (state.previewing) stopPreviewCut();
+    state.motionTimelineDrag = { pointerId: event.pointerId, index };
+    elements.motionTimelineMarkers.setPointerCapture(event.pointerId);
+    setMotionCropTimingFromPointer(event);
+  });
+  elements.motionTimelineMarkers.addEventListener("pointermove", (event) => {
+    setMotionCropTimingFromPointer(event);
+  });
+  elements.motionTimelineMarkers.addEventListener("pointerup", finishMotionTimelineDrag);
+  elements.motionTimelineMarkers.addEventListener("pointercancel", finishMotionTimelineDrag);
+  elements.addMotionCropKeyframe.addEventListener("click", addMotionCropKeyframe);
+  elements.removeMotionCropKeyframe.addEventListener("click", removeMotionCropKeyframe);
+  elements.motionCropTiming.addEventListener("change", () => {
+    setMotionCropTiming(elements.motionCropTiming.value);
   });
   elements.cropBox.addEventListener("pointerdown", onCropPointerDown);
   elements.cropBox.addEventListener("pointermove", onCropPointerMove);
@@ -1158,7 +1604,7 @@
   elements.outputWidth.addEventListener("input", () => {
     if (elements.resolutionSelect.value !== "custom") elements.resolutionSelect.value = "custom";
     if (state.dimensionLocked && state.asset) {
-      const crop = cropPixels();
+      const crop = outputReferenceCropPixels();
       elements.outputHeight.value = Math.max(1, Math.round(Number(elements.outputWidth.value || 1) * crop.h / crop.w));
     }
     updateOutputSummary();
@@ -1166,7 +1612,7 @@
   elements.outputHeight.addEventListener("input", () => {
     if (elements.resolutionSelect.value !== "custom") elements.resolutionSelect.value = "custom";
     if (state.dimensionLocked && state.asset) {
-      const crop = cropPixels();
+      const crop = outputReferenceCropPixels();
       elements.outputWidth.value = Math.max(1, Math.round(Number(elements.outputHeight.value || 1) * crop.w / crop.h));
     }
     updateOutputSummary();
