@@ -160,9 +160,9 @@ def create_app(
                         sequence_id=sequence.id,
                         frame_id=path.stem,
                     ),
-                    "hold": 1,
+                    "hold": hold,
                 }
-                for path in sequence.frames
+                for path, hold in zip(sequence.frames, sequence.holds, strict=True)
             ],
         }
 

@@ -97,10 +97,25 @@
                 <button type="button" class="chip" data-aspect="0.5625">9:16</button>
               </div>
             </div>
+            <div class="motion-crop-bar" id="motionCropBar">
+              <label class="motion-crop-toggle">
+                <input id="motionCropEnabled" type="checkbox">
+                <span>Motion crop</span>
+              </label>
+              <div class="motion-keyframes" id="motionCropKeyframes" role="group" aria-label="Motion crop positions"></div>
+              <label class="motion-keyframe-time" for="motionCropTiming">
+                At <input id="motionCropTiming" type="number" min="0" step="0.01" value="0" disabled><span>s</span>
+              </label>
+              <div class="motion-keyframe-actions">
+                <button type="button" id="addMotionCropKeyframe" disabled>＋ Position</button>
+                <button type="button" id="removeMotionCropKeyframe" disabled>− Position</button>
+              </div>
+              <small id="motionCropHint">Turn on to add up to 10 pan and zoom positions.</small>
+            </div>
 
             <div class="stage-wrap">
               <div class="media-stage" id="mediaStage">
-                <video id="videoPreview" playsinline muted preload="metadata" hidden></video>
+                <video id="videoPreview" playsinline muted preload="auto" hidden></video>
                 <img id="imagePreview" alt="Animated media preview" hidden>
                 <div class="crop-shade shade-top"></div>
                 <div class="crop-shade shade-left"></div>
@@ -113,7 +128,10 @@
                   <button class="crop-handle ne" data-handle="ne" aria-label="Resize crop from top right"></button>
                   <button class="crop-handle sw" data-handle="sw" aria-label="Resize crop from bottom left"></button>
                   <button class="crop-handle se" data-handle="se" aria-label="Resize crop from bottom right"></button>
-                  <span class="crop-size" id="cropSize">—</span>
+                  <span class="crop-info">
+                    <span class="crop-size" id="cropSize">—</span>
+                    <span class="preview-timestamp" id="currentTimestamp">0:00.00</span>
+                  </span>
                 </div>
               </div>
             </div>
@@ -139,6 +157,7 @@
 
             <div class="range-shell" id="rangeShell">
               <div class="range-track"><span class="range-fill" id="rangeFill"></span></div>
+              <div class="motion-timeline-markers" id="motionTimelineMarkers" aria-label="Motion crop timeline positions" hidden></div>
               <input id="startRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="Start time">
               <input id="endRange" type="range" min="0" max="1" step="0.01" value="1" aria-label="End time">
             </div>
@@ -147,7 +166,7 @@
             <div class="frame-editor-launch">
               <div>
                 <strong>Edit every frame</strong>
-                <span>Reorder, set hold timing, or remove individual frames.</span>
+                <span>Reorder, duplicate, delete, or set hold timing for individual frames.</span>
               </div>
               <button type="button" class="ghost-button" id="openFrameEditorButton">View all frames</button>
             </div>
@@ -158,7 +177,7 @@
               <div>
                 <span class="section-kicker">Frame editor</span>
                 <h3>Arrange the exact sequence</h3>
-                <p id="frameEditorSummary">Drag frames to reorder them. A hold of 1 equals one tick at the selected FPS.</p>
+                <p id="frameEditorSummary">Visually unchanged frame runs are collapsed without changing the original timing.</p>
               </div>
               <button type="button" class="text-button" id="closeFrameEditorButton">Close</button>
             </div>

@@ -8,7 +8,7 @@ GIFmakerAthome is a single-user desktop application delivered through a local Fl
 2. `gifmaker.web.create_app` creates fresh import, export, preview, and frame directories below the application data root.
 3. The browser loads `templates/index.html`, `static/css/style.css`, and `static/js/app.js` from the local server and receives an opaque page-session identifier.
 4. Uploads create a `MediaAsset` immediately. URL imports run in a daemon worker, publish extraction/download progress through a short-lived job record, and create an asset when complete.
-5. The editor submits validated timing, crop, size, frame-rate, format, and compression settings.
+5. The editor submits validated timing, static or interpolated motion crop, size, frame-rate, format, and compression settings.
 6. `gifmaker.media` builds an FFmpeg filter graph and invokes only the resolved FFmpeg executable without a command shell.
 7. The generated asset is served by an opaque identifier and downloaded through the local application.
 8. When a page unloads, it sends an authenticated close beacon. The server stops after the last page closes, with a short delay that allows a refreshed page to replace its old session.

@@ -14,9 +14,12 @@ from gifmaker.media import (
     ImportProgress,
     MediaError,
     MediaStore,
+    MotionCropKeyframe,
+    _collapse_consecutive_frames,
     _download_direct,
     _run_ffmpeg,
     build_filter_graph,
+    build_frame_extraction_graph,
     ffmpeg_executable,
     validate_public_url,
 )
@@ -99,6 +102,73 @@ def test_keep_filter_contains_trim_crop_scale_and_palette() -> None:
     assert "palettegen=max_colors=192" in graph
     assert "hqdn3d" not in graph
     assert "diff_mode=rectangle" not in graph
+
+
+def test_motion_crop_interpolates_in_exports_and_frame_extraction() -> None:
+    options = sample_options(motion_crop=True, crop_end_x=30, crop_end_y=15)
+    expected = "crop=120:80:'if(lt(t,2),10+(20)*t/2,30)':'if(lt(t,2),5+(10)*t/2,15)'"
+    assert expected in build_filter_graph(options, duration=3)
+    assert expected in build_frame_extraction_graph(options, duration=3)
+
+    discard = replace(options, discard_middle=True)
+    assert "if(lt(t,1),10+(20)*t/1,30)" in build_filter_graph(discard, duration=3)
+
+    variable = sample_options(
+        crop_x=0,
+        crop_y=0,
+        motion_crop=True,
+        motion_crop_keyframes=(
+            MotionCropKeyframe(0, 0, 120, 80),
+            MotionCropKeyframe(10, 10, 100, 60),
+            MotionCropKeyframe(30, 20, 80, 40),
+        ),
+    )
+    variable_graph = build_filter_graph(variable, duration=3)
+    assert "scale=w='iw*60/" in variable_graph
+    assert "flags=lanczos:eval=frame,crop=60:40:" in variable_graph
+    assert "if(lt(t,1)" in variable_graph
+    assert "if(lt(t,2)" in variable_graph
+    assert "eval=frame" in build_frame_extraction_graph(variable, duration=3)
+
+    custom_timing = replace(
+        variable,
+        motion_crop_keyframes=(
+            MotionCropKeyframe(0, 0, 120, 80, 0),
+            MotionCropKeyframe(10, 10, 100, 60, 0.25),
+            MotionCropKeyframe(30, 20, 80, 40, 1),
+        ),
+    )
+    custom_graph = build_filter_graph(custom_timing, duration=3)
+    assert "if(lt(t,0.5)" in custom_graph
+    assert "if(lt(t,2)" in custom_graph
+
+    movable_endpoints = replace(
+        variable,
+        motion_crop_keyframes=(
+            MotionCropKeyframe(0, 0, 120, 80, 0.1),
+            MotionCropKeyframe(10, 10, 100, 60, 0.4),
+            MotionCropKeyframe(30, 20, 80, 40, 0.9),
+        ),
+    )
+    movable_graph = build_filter_graph(movable_endpoints, duration=3)
+    assert ",trim=start=0.2:end=1.8,setpts=PTS-STARTPTS" in movable_graph
+    assert "if(lt(t,0.2),0," in movable_graph
+    assert "0+(10)*(t-0.2)/0.6" in movable_graph
+    assert "if(lt(t,1.8)" in movable_graph
+
+    shared_timing = replace(
+        variable,
+        motion_crop_keyframes=(
+            MotionCropKeyframe(0, 0, 120, 80, 0),
+            MotionCropKeyframe(10, 10, 100, 60, 0.5),
+            MotionCropKeyframe(30, 20, 80, 40, 0.5),
+        ),
+    )
+    shared_graph = build_filter_graph(shared_timing, duration=3)
+    assert ",trim=start=0:end=1,setpts=PTS-STARTPTS" in shared_graph
+    assert ",trim=start=0:end=1,setpts=PTS-STARTPTS" in build_frame_extraction_graph(shared_timing, duration=3)
+    assert "if(lt(t,1),0+(10)*t/1,30)" in shared_graph
+    assert "/0" not in shared_graph
 
 
 def test_optional_gif_compression_filters_are_disabled_by_default_and_independently_enabled() -> None:
@@ -197,9 +267,109 @@ def test_export_payload_defaults_to_webm_and_optional_optimizations_off(tmp_path
     assert options.remove_duplicate_frames is False
     with pytest.raises(MediaError, match="between 16 KB"):
         ExportOptions.from_payload({"max_size_kb": 15}, asset)
+    with pytest.raises(MediaError, match="motion crop"):
+        ExportOptions.from_payload({"motion_crop": True, "crop_end_x": 1}, asset)
+    motion = ExportOptions.from_payload(
+        {
+            "motion_crop": True,
+            "motion_crop_keyframes": [
+                {"x": 0, "y": 0, "width": 80, "height": 60},
+                {"x": 40, "y": 30, "width": 40, "height": 30},
+            ],
+        },
+        asset,
+    )
+    assert [keyframe.width for keyframe in motion.motion_crop_keyframes] == [80, 40]
+    movable_motion = ExportOptions.from_payload(
+        {
+            "motion_crop": True,
+            "motion_crop_keyframes": [
+                {"x": 0, "y": 0, "width": 80, "height": 60, "progress": 0.1},
+                {"x": 40, "y": 30, "width": 40, "height": 30, "progress": 0.9},
+            ],
+        },
+        asset,
+    )
+    assert [keyframe.progress for keyframe in movable_motion.motion_crop_keyframes] == [0.1, 0.9]
+    shared_motion = ExportOptions.from_payload(
+        {
+            "motion_crop": True,
+            "motion_crop_keyframes": [
+                {"x": 0, "y": 0, "width": 80, "height": 60, "progress": 0.1},
+                {"x": 20, "y": 15, "width": 60, "height": 45, "progress": 0.4},
+                {"x": 40, "y": 30, "width": 40, "height": 30, "progress": 0.4},
+            ],
+        },
+        asset,
+    )
+    assert [keyframe.progress for keyframe in shared_motion.motion_crop_keyframes] == [0.1, 0.4, 0.4]
+    with pytest.raises(MediaError, match="last motion crop position"):
+        ExportOptions.from_payload(
+            {
+                "motion_crop": True,
+                "motion_crop_keyframes": [
+                    {"x": 0, "y": 0, "width": 80, "height": 60, "progress": 0},
+                    {"x": 0, "y": 0, "width": 80, "height": 60, "progress": 0},
+                ],
+            },
+            asset,
+        )
+    with pytest.raises(MediaError, match="between 2 and 10"):
+        ExportOptions.from_payload(
+            {
+                "motion_crop": True,
+                "motion_crop_keyframes": [{"x": 0, "y": 0, "width": asset.width, "height": asset.height}] * 11,
+            },
+            asset,
+        )
+    with pytest.raises(MediaError, match="must not move backward"):
+        ExportOptions.from_payload(
+            {
+                "motion_crop": True,
+                "motion_crop_keyframes": [
+                    {"x": 0, "y": 0, "width": 80, "height": 60, "progress": 0},
+                    {"x": 0, "y": 0, "width": 80, "height": 60, "progress": 0.8},
+                    {"x": 0, "y": 0, "width": 80, "height": 60, "progress": 0.7},
+                    {"x": 0, "y": 0, "width": 80, "height": 60, "progress": 1},
+                ],
+            },
+            asset,
+        )
 
 
-def test_frame_editor_extracts_reorders_holds_deletes_and_compiles_gif_and_webm(tmp_path: Path) -> None:
+def test_visually_unchanged_frames_collapse_without_changing_unique_frame_timing(tmp_path: Path) -> None:
+    first = tmp_path / "first.png"
+    duplicate = tmp_path / "duplicate.png"
+    changed = tmp_path / "changed.png"
+    Image.new("RGBA", (12, 8), "#ff0000").save(first, compress_level=0)
+    Image.new("RGBA", (12, 8), "#ff0000").save(duplicate, compress_level=9)
+    Image.new("RGBA", (12, 8), "#0000ff").save(changed)
+
+    frames, holds = _collapse_consecutive_frames((first, duplicate, changed))
+
+    assert frames == (first, changed)
+    assert holds == (2, 1)
+
+
+def test_visual_duplicate_runs_compare_every_frame_with_the_run_anchor(tmp_path: Path) -> None:
+    paths: list[Path] = []
+    for changed_pixels in (0, 3, 6):
+        image = Image.new("RGBA", (10, 10), "#000000")
+        for index in range(changed_pixels):
+            image.putpixel((index, 0), (255, 255, 255, 255))
+        path = tmp_path / f"changed-{changed_pixels}.png"
+        image.save(path)
+        paths.append(path)
+
+    frames, holds = _collapse_consecutive_frames(tuple(paths))
+
+    assert frames == (paths[0], paths[2])
+    assert holds == (2, 1)
+
+
+def test_frame_editor_extracts_reorders_holds_deletes_duplicates_and_compiles_gif_and_webm(
+    tmp_path: Path,
+) -> None:
     source_path = tmp_path / "source.gif"
     make_animated_gif(source_path)
     store = MediaStore(tmp_path / "data")
@@ -219,7 +389,9 @@ def test_frame_editor_extracts_reorders_holds_deletes_and_compiles_gif_and_webm(
     )
     sequence = store.create_frame_sequence(source, extraction)
 
-    assert len(sequence.frames) >= 4
+    assert len(sequence.frames) >= 2
+    assert len(sequence.holds) == len(sequence.frames)
+    assert all(1 <= hold <= 300 for hold in sequence.holds)
     assert (sequence.width, sequence.height, sequence.fps) == (40, 30, 20)
     with Image.open(sequence.frames[0]) as extracted:
         assert extracted.size == (40, 30)
@@ -262,12 +434,12 @@ def test_frame_editor_extracts_reorders_holds_deletes_and_compiles_gif_and_webm(
     assert webm.mime == "video/webm"
     assert webm.duration == pytest.approx(0.15, abs=0.12)
 
-    with pytest.raises(MediaError, match="invalid or repeated"):
-        store.create_frame_export(
-            sequence,
-            [{"id": sequence.frames[0].stem}, {"id": sequence.frames[0].stem}],
-            FrameExportOptions("gif", sequence.width, sequence.height),
-        )
+    duplicated = store.create_frame_export(
+        sequence,
+        [{"id": sequence.frames[0].stem}, {"id": sequence.frames[0].stem}],
+        FrameExportOptions("gif", sequence.width, sequence.height),
+    )
+    assert duplicated.path.read_bytes().startswith(b"GIF8")
 
     long_source = replace(source, duration=(MAX_FRAME_EDITOR_FRAMES + 1) / 60)
     too_long = replace(extraction, end=long_source.duration, fps=60)
@@ -323,6 +495,11 @@ def test_real_ffmpeg_exports_gif_webp_and_webm_with_crop_resize_and_middle_remov
 
     store = MediaStore(tmp_path / "data")
     source = store.register(source_path, "My Holiday Clip.mp4")
+    assert source.codec == "h264"
+    assert not source.browser_preview_required
+    hevc_source = replace(source, codec="hevc")
+    assert hevc_source.browser_preview_required
+    assert hevc_source.as_api_dict()["browser_preview_required"] is True
     options = sample_options(start=0.8, end=2.2, discard_middle=True)
     options.validate(source)
     gif_result = store.create_export(source, options)
@@ -331,6 +508,29 @@ def test_real_ffmpeg_exports_gif_webp_and_webm_with_crop_resize_and_middle_remov
     assert gif_result.name == "My Holiday Clip.gif"
     assert (gif_result.width, gif_result.height) == (60, 40)
     assert gif_result.duration == pytest.approx(1.6, abs=0.25)
+
+    motion_result = store.create_export(
+        source,
+        replace(
+            options,
+            start=0,
+            end=3,
+            discard_middle=False,
+            crop_x=0,
+            crop_y=0,
+            crop_width=160,
+            crop_height=90,
+            motion_crop=True,
+            motion_crop_keyframes=(
+                MotionCropKeyframe(0, 0, 160, 90, 0.25),
+                MotionCropKeyframe(30, 10, 100, 70, 0.375),
+                MotionCropKeyframe(80, 20, 80, 60, 0.5),
+            ),
+        ),
+    )
+    assert motion_result.path.read_bytes().startswith(b"GIF8")
+    assert (motion_result.width, motion_result.height) == (60, 40)
+    assert motion_result.duration == pytest.approx(0.75, abs=0.25)
 
     optimized_gif = store.create_export(
         source,
@@ -368,6 +568,8 @@ def test_real_ffmpeg_exports_gif_webp_and_webm_with_crop_resize_and_middle_remov
     webm_result = store.create_export(source, webm_options)
     assert webm_result.path.read_bytes()[:4] == b"\x1aE\xdf\xa3"
     assert webm_result.mime == "video/webm"
+    assert webm_result.codec == "vp9"
+    assert not webm_result.browser_preview_required
     assert webm_result.name == "My Holiday Clip.webm"
     assert webm_result.kind == "video"
     assert (webm_result.width, webm_result.height) == (60, 40)

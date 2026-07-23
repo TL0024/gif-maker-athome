@@ -37,12 +37,13 @@ After setup, local-file editing works offline. URL importing requires an interne
 - Import supported media URLs, including direct media links and compatible websites, with live extraction and download progress.
 - Start every import with the complete original frame selected; optional free, original, 1:1, 16:9, and 9:16 crop controls remain available.
 - Drag or resize the crop frame directly over the media preview.
+- Enable **Motion crop** to smoothly pan and zoom through 2–10 independently positioned, sized, and timed crop keyframes.
 - Keep a selected time range or remove a selected section from the middle.
 - Export adaptive-palette GIF, animated WebP, or silent VP9 WebM.
 - Keep the cropped pixels at their original resolution or use 512 × 512, percentage, and custom-size presets.
 - Choose frame rates from 1 through 30 FPS and adjust format-specific quality.
 - Apply a hard output limit of 256 KB, 512 KB, 1 MB, 2 MB, or a custom size.
-- Open a frame editor to reorder frames, delete frames, and assign per-frame hold timing before compiling GIF or WebM.
+- Open a frame editor to reorder, duplicate, delete, and assign hold timing to frames before compiling GIF or WebM.
 - Extend a GIF or WebM into a forward-and-reverse loop without repeating the turnaround frame.
 - Build a browser-compatible preview locally when the browser cannot play the imported format directly.
 - Remove audio, subtitles, data streams, chapters, and inherited metadata from every export.
@@ -52,7 +53,7 @@ After setup, local-file editing works offline. URL importing requires an interne
 
 1. Upload a file or select **Paste a link** and import supported media.
    URL imports show their extraction stage first, then downloaded bytes, percentage, transfer speed, and estimated time when the source provides that information.
-2. The crop initially covers the complete source. Drag the crop frame or choose an aspect preset if you want a smaller region.
+2. The crop initially covers the complete source. Drag the crop frame or choose an aspect preset if you want a smaller region. For a moving crop, enable **Motion crop**, set position 1, then use **+ Position** to build a path of up to 10 positions. Every added position inherits the latest position's crop and time so you can extend the motion from where it left off; **− Position** removes the currently selected position while keeping at least one. Motion mode replaces the two range thumbs with numbered timing markers. Select a position tab, then drag its highlighted marker to update that position's **At** time; the other markers remain grey and fixed. At least two positions are required, and the exported animation includes only the time from the first marker through the last marker.
 3. Set the start and end controls. **Keep selected range** exports that interval; **Remove selected middle** joins the sections before and after it.
 4. Choose GIF, animated WebP, or WebM. WebM, 30 FPS, quality 40, original crop size, and no file-size cap are the defaults.
 5. Adjust resolution, FPS, quality, GIF palette, and the optional size cap.
@@ -60,7 +61,7 @@ After setup, local-file editing works offline. URL importing requires an interne
 
 ### Frame editor
 
-Select GIF or WebM and choose **View all frames** for frame-level control. The working frame list reflects the current cut, crop, resolution, and FPS. You can drag frames into a new order, delete unwanted frames, restore the original sequence, or increase a frame's hold value. A hold of 1 is one tick at the selected FPS.
+Select GIF or WebM and choose **View all frames** for frame-level control. The working frame list reflects the current cut, crop, resolution, and FPS. You can drag frames into a new order, duplicate or delete any frame card, restore the original sequence, or change a frame's hold value. Consecutive frames are treated as visually unchanged when no more than 3% of pixels differ beyond a small per-channel tolerance. Every candidate is compared with the first frame of its run, preventing slow changes from accumulating unnoticed. A collapsed card's hold equals its source run length, while non-duplicates keep Hold 1, preserving the original duration.
 
 A frame-editor session supports up to 900 source frames and 18,000 total hold ticks. Shorten the selection or reduce FPS if the working clip is too large. Changing the crop, timing, resolution, or FPS makes an existing frame list stale; rebuild it before compiling so the edited sequence matches the current settings.
 
@@ -111,7 +112,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-The test suite covers local API protection, browser-tab shutdown and refresh handling, URL-download progress, startup and manual cleanup, upload and download handling, crop and resize filters, time-range removal, GIF palette generation and optional compression, animated WebP, VP9 WebM, output-size limits, metadata and audio removal, frame extraction and editing, hold timing, and forward/reverse loop generation.
+The test suite covers local API protection, browser-tab shutdown and refresh handling, URL-download progress, startup and manual cleanup, upload and download handling, static and independently timed multi-position motion crops, time-range removal, GIF palette generation and optional compression, animated WebP, VP9 WebM, output-size limits, metadata and audio removal, frame extraction and editing, hold timing, and forward/reverse loop generation.
 
 Run the security checks with:
 
