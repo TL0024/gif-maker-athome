@@ -7,8 +7,8 @@ GIFmakerAthome is a single-user desktop application delivered through a local Fl
 1. `app.py` selects an unused loopback port, creates a threaded Werkzeug server on `127.0.0.1`, and opens the browser.
 2. `gifmaker.web.create_app` creates fresh import, export, preview, and frame directories below the application data root.
 3. The browser loads `templates/index.html`, `static/css/style.css`, and `static/js/app.js` from the local server and receives an opaque page-session identifier.
-4. Uploads create a `MediaAsset` immediately. URL imports run in a daemon worker, publish extraction/download progress through a short-lived job record, and create an asset when complete.
-5. The editor submits validated timing, static or interpolated motion crop, size, frame-rate, format, and compression settings.
+4. Uploads create a `MediaAsset` immediately. URL imports run in a daemon worker, publish extraction/download progress through a short-lived job record, prefer a browser-compatible video stream, and create an asset when complete. If the imported codec still cannot play in the browser, the backend creates a local H.264 preview while retaining the original media for export.
+5. The editor submits validated timing, static or interpolated motion crop, size, frame-rate, format, and compression settings. Motion crops contain up to 10 independently sized keyframes and use the first and last keyframe times as the output interval.
 6. `gifmaker.media` builds an FFmpeg filter graph and invokes only the resolved FFmpeg executable without a command shell.
 7. The generated asset is served by an opaque identifier and downloaded through the local application.
 8. When a page unloads, it sends an authenticated close beacon. The server stops after the last page closes, with a short delay that allows a refreshed page to replace its old session.
@@ -38,9 +38,9 @@ The application processes untrusted media with Pillow, imageio-ffmpeg/FFmpeg, re
 
 ## Storage lifecycle and limits
 
-Source runs use `.gifmaker-athome-data/`; packaged runs use `%LOCALAPPDATA%\GIFmakerAthome\cache`. Startup removes the previous temporary workspace, and **Clear cache** removes current imports, previews, extracted frames, and generated files. Users must download outputs they want to retain. Import-job state exists only in process memory and disappears when the local server stops.
+Source runs use `.gifmaker-athome-data/`; packaged runs use `%LOCALAPPDATA%\GIFmakerAthome\cache`. Startup removes the previous temporary workspace, and **Clear cache** removes current imports, browser-compatible previews, extracted frames, and generated files. Users must download outputs they want to retain. Import-job state exists only in process memory and disappears when the local server stops.
 
-Important bounded inputs include a 4 GiB Flask request limit, a 2 GiB URL-download limit, dimensions no larger than 4096 pixels per side or 16,777,216 output pixels, at most 900 extracted source frames, and at most 18,000 frame hold ticks. Export subprocesses also use operation-specific timeouts.
+Important bounded inputs include a 4 GiB Flask request limit, a 2 GiB URL-download limit, dimensions no larger than 4096 pixels per side or 16,777,216 output pixels, at most 10 motion-crop positions, at most 900 extracted source frames, and at most 18,000 frame hold ticks. Frame editing can collapse visually unchanged runs into one card; each candidate is compared with the run's first decoded RGBA frame so small pixel noise is tolerated without allowing gradual change to accumulate. Export subprocesses also use operation-specific timeouts.
 
 ## Packaging
 

@@ -6,6 +6,10 @@
 
 GIFmakerAthome is a local-first Windows editor for turning videos and animated images into GIF, animated WebP, or VP9 WebM files. The interface opens in your browser, while the application and media processing stay on `127.0.0.1` on your computer. You can work with local files or media URLs supported by the installed importer.
 
+## What's new in v1.1.0
+
+Version 1.1.0 adds timed motion-crop paths with up to 10 independently sized positions, draggable numbered timing markers, current-time feedback in the crop preview, and smarter frame editing with visual duplicate grouping plus duplicate/delete controls. It also makes successfully imported videos more reliable to preview by selecting compatible streams and generating a local browser-compatible fallback when needed. See the [changelog](CHANGELOG.md) for the complete release notes.
+
 ## Download and run
 
 The easiest option is the ready-to-run Windows executable:
@@ -133,7 +137,7 @@ The command is the same quality gate used by release builds and CI. It must comp
 
 GitHub Actions separates those checks into independently enforceable jobs and adds PSScriptAnalyzer, pull-request dependency review, CodeQL analysis for Python and JavaScript, tests on Python 3.11 and 3.13, and a clean PyInstaller build. Third-party actions are pinned to immutable commits, ordinary workflows have read-only repository access, checkout credentials are not persisted, and every job has a time limit. Dependabot proposes grouped Python and Actions updates each week.
 
-The `main` branch requires pull requests and successful quality checks. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design, [docs/CI.md](docs/CI.md) for every automated gate, [docs/RELEASING.md](docs/RELEASING.md) for the release process, [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) for dependency credits, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+The `main` branch requires pull requests and successful quality checks. See [CHANGELOG.md](CHANGELOG.md) for release notes, [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design, [docs/CI.md](docs/CI.md) for every automated gate, [docs/RELEASING.md](docs/RELEASING.md) for the release process, [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) for dependency credits, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 The optional live media-URL smoke test is separate because it uses the network. Supply a URL that you are authorized to retrieve:
 
@@ -160,6 +164,7 @@ The script installs the development tools into `.venv`, runs the security checks
 - `tests/` contains the automated test suite.
 - `scripts/` contains the optional live link-import smoke test.
 - `docs/` explains the architecture, CI policy, and release process.
+- `CHANGELOG.md` records user-visible changes for each release.
 - `pyproject.toml`, `security-check.ps1`, and `.github/workflows/security.yml` define and enforce the quality gates.
 - `packaging/` and `GIFmakerAthome.spec` contain Windows release metadata.
 

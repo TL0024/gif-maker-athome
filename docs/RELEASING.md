@@ -4,12 +4,12 @@ Releases use semantic version tags such as `v1.0.0`. The application version in 
 
 ## Release checklist
 
-1. Update the application version, Windows version metadata, and user-facing release notes when needed.
+1. Update the application version, Windows version metadata, and the matching entry in `CHANGELOG.md`.
 2. Run `security-check.ps1` and `python -m pytest -q` locally.
 3. Run `build-release.ps1` and smoke-test `release\GIFmakerAthome.exe` on Windows.
 4. Compare `Get-FileHash release\GIFmakerAthome.exe -Algorithm SHA256` with `release\SHA256SUMS.txt`.
 5. Open and merge a pull request. Do not tag an unmerged commit or bypass a required check.
-6. Create and push an annotated `vMAJOR.MINOR.PATCH` tag on the verified `main` commit.
+6. Create and push an annotated `vMAJOR.MINOR.PATCH` tag on the verified `main` commit. Confirm the changelog comparison link resolves after the tag is available.
 7. Confirm the **Release Windows executable** workflow publishes `GIFmakerAthome.exe` and `SHA256SUMS.txt` on the GitHub release.
 8. Download the published executable, verify its checksum, and perform a final launch/upload/export smoke test.
 
