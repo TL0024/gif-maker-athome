@@ -1,9 +1,9 @@
 -r requirements.txt
 pytest>=9.1.1,<10
-pyinstaller>=6.21.0,<7
+pyinstaller>=6.22.0,<7
 bandit>=1.9.4,<2
 pip-audit>=2.10.1,<3
 mypy>=2.3,<3
-ruff>=0.16.0,<0.17
-types-yt-dlp>=2026.7.4.20260725
-zizmor>=1.28.0,<2
+ruff>=0.16.3,<0.17
+types-yt-dlp>=2026.7.4.20260807
+zizmor>=1.29.0,<2
