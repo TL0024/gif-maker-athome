@@ -4,6 +4,8 @@ All notable changes to GIFmakerAthome are documented here. Releases follow seman
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-24
+
 ### Added
 
 - Local still-image uploads for PNG, JPEG, single-frame WebP, and BMP files. Animated GIF, animated WebP, and APNG files continue through the animation workflow.
@@ -49,6 +51,7 @@ All notable changes to GIFmakerAthome are documented here. Releases follow seman
 
 - Initial public release with local file and URL imports, crop and time editing, GIF/animated WebP/VP9 WebM export, size targeting, frame editing, complete-loop generation, and a packaged Windows executable.
 
-[Unreleased]: https://github.com/TL0024/gif-maker-athome/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/TL0024/gif-maker-athome/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/TL0024/gif-maker-athome/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/TL0024/gif-maker-athome/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/TL0024/gif-maker-athome/releases/tag/v1.0.0
