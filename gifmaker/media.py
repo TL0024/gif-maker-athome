@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 from bs4 import BeautifulSoup
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw, ImageOps
 from werkzeug.utils import secure_filename
 
 if TYPE_CHECKING:
@@ -120,6 +120,77 @@ class MediaAsset:
 
 
 @dataclass(frozen=True)
+class VideoSpeedOptions:
+    speed: float
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any], media: MediaAsset) -> VideoSpeedOptions:
+        try:
+            speed = float(payload.get("speed", 1))
+        except (TypeError, ValueError) as exc:
+            raise MediaError("Choose a video speed between 0.5x and 8x.") from exc
+        options = cls(speed=speed)
+        options.validate(media)
+        return options
+
+    def validate(self, media: MediaAsset) -> None:
+        if media.kind != "video":
+            raise MediaError("Speed adjustment is available only for video sources.")
+        if not math.isfinite(self.speed) or not 0.5 <= self.speed <= 8:
+            raise MediaError("Choose a video speed between 0.5x and 8x.")
+
+
+@dataclass(frozen=True)
+class ImageExportOptions:
+    crop_x: int
+    crop_y: int
+    crop_width: int
+    crop_height: int
+    output_width: int
+    output_height: int
+    output_format: str = "png"
+    quality: int = 85
+    circle_crop: bool = False
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any], media: MediaAsset) -> ImageExportOptions:
+        try:
+            options = cls(
+                crop_x=int(payload.get("crop_x", 0)),
+                crop_y=int(payload.get("crop_y", 0)),
+                crop_width=int(payload.get("crop_width", media.width)),
+                crop_height=int(payload.get("crop_height", media.height)),
+                output_width=int(payload.get("output_width", media.width)),
+                output_height=int(payload.get("output_height", media.height)),
+                output_format=str(payload.get("output_format", "png")).strip().lower(),
+                quality=int(payload.get("quality", 85)),
+                circle_crop=bool(payload.get("circle_crop", False)),
+            )
+        except (TypeError, ValueError) as exc:
+            raise MediaError("One or more image-export settings are invalid.") from exc
+        options.validate(media)
+        return options
+
+    def validate(self, media: MediaAsset) -> None:
+        if media.kind != "still_image":
+            raise MediaError("The image editor accepts only still images.")
+        if self.output_format not in {"png", "jpeg", "webp"}:
+            raise MediaError("The image editor can export only PNG, JPEG, or WebP.")
+        if not (1 <= self.output_width <= 4096 and 1 <= self.output_height <= 4096):
+            raise MediaError("Output dimensions must be between 1 and 4096 pixels.")
+        if self.circle_crop and self.output_width != self.output_height:
+            raise MediaError("Circle crops require equal output width and height.")
+        if not 1 <= self.quality <= 100:
+            raise MediaError("Image quality must be between 1 and 100.")
+        if self.crop_width <= 0 or self.crop_height <= 0:
+            raise MediaError("The crop must have a positive width and height.")
+        if self.crop_x < 0 or self.crop_y < 0:
+            raise MediaError("The crop must stay inside the source image.")
+        if self.crop_x + self.crop_width > media.width or self.crop_y + self.crop_height > media.height:
+            raise MediaError("The crop must stay inside the source image.")
+
+
+@dataclass(frozen=True)
 class MotionCropKeyframe:
     x: int
     y: int
@@ -139,6 +210,8 @@ class ExportOptions:
     crop_height: int
     output_width: int
     output_height: int
+    reverse: bool = False
+    circle_crop: bool = False
     motion_crop: bool = False
     crop_end_x: int = 0
     crop_end_y: int = 0
@@ -182,6 +255,8 @@ class ExportOptions:
                 crop_height=int(payload.get("crop_height", media.height)),
                 output_width=int(payload.get("output_width", media.width)),
                 output_height=int(payload.get("output_height", media.height)),
+                reverse=bool(payload.get("reverse", False)),
+                circle_crop=bool(payload.get("circle_crop", False)),
                 motion_crop=bool(payload.get("motion_crop", False)),
                 crop_end_x=int(payload.get("crop_end_x", payload.get("crop_x", 0))),
                 crop_end_y=int(payload.get("crop_end_y", payload.get("crop_y", 0))),
@@ -207,6 +282,8 @@ class ExportOptions:
             raise MediaError("Choose an end time that is after the start time and inside the media duration.")
         if self.discard_middle and self.start <= tolerance and self.end >= media.duration - tolerance:
             raise MediaError("Removing that interval would leave no frames. Shorten the removed interval.")
+        if self.reverse and media.kind != "video":
+            raise MediaError("Reverse playback is available only for video sources.")
         if self.crop_width < 1 or self.crop_height < 1 or self.crop_x < 0 or self.crop_y < 0:
             raise MediaError("The crop rectangle is invalid.")
         if self.crop_x + self.crop_width > media.width or self.crop_y + self.crop_height > media.height:
@@ -236,6 +313,8 @@ class ExportOptions:
             raise MediaError("Output dimensions must be between 1 and 4096 pixels.")
         if self.output_width * self.output_height > 16_777_216:
             raise MediaError("The selected output resolution is too large.")
+        if self.circle_crop and self.output_width != self.output_height:
+            raise MediaError("Circle crops require equal output width and height.")
         if not 1 <= self.fps <= 60:
             raise MediaError("Frame rate must be between 1 and 60 FPS.")
         if self.output_format not in {"gif", "webp", "webm"}:
@@ -356,11 +435,13 @@ def _run_ffmpeg(command: list[str], timeout: int) -> subprocess.CompletedProcess
 
 def probe_media(path: Path) -> MediaInfo:
     """Read dimensions and duration without modifying the source."""
-    # A source that Pillow cannot identify as animated falls through to FFmpeg probing.
+    # A source that Pillow cannot identify as a supported image falls through to
+    # FFmpeg probing. Single-frame files use the dedicated still-image editor.
     with suppress(OSError, ValueError), Image.open(path) as image:
-        if getattr(image, "is_animated", False) or image.format in {"GIF", "WEBP"}:
+        image_format = image.format or ""
+        frames = int(getattr(image, "n_frames", 1))
+        if (getattr(image, "is_animated", False) and frames > 1) or image_format == "GIF":
             duration_ms = 0
-            frames = getattr(image, "n_frames", 1)
             for index in range(frames):
                 image.seek(index)
                 duration_ms += int(image.info.get("duration", 100))
@@ -369,7 +450,16 @@ def probe_media(path: Path) -> MediaInfo:
                 height=image.height,
                 duration=max(duration_ms / 1000, 0.1),
                 kind="image",
-                mime=Image.MIME.get(image.format or "", "image/gif"),
+                mime=Image.MIME.get(image_format, "image/gif"),
+            )
+        if image_format in {"PNG", "JPEG", "WEBP", "GIF", "BMP"}:
+            oriented = ImageOps.exif_transpose(image)
+            return MediaInfo(
+                width=oriented.width,
+                height=oriented.height,
+                duration=0,
+                kind="still_image",
+                mime=Image.MIME.get(image_format, mimetypes.guess_type(path.name)[0] or "image/png"),
             )
 
     try:
@@ -386,7 +476,7 @@ def probe_media(path: Path) -> MediaInfo:
         codec = str(metadata.get("codec") or "").strip().lower() or None
         return MediaInfo(int(size[0]), int(size[1]), duration, "video", mime, codec)
     except (ImportError, OSError, RuntimeError, StopIteration, ValueError) as exc:
-        raise MediaError("This file is not a readable video or animated image.") from exc
+        raise MediaError("This file is not a readable video or supported image.") from exc
 
 
 def _num(value: float) -> str:
@@ -489,6 +579,13 @@ def _crop_and_scale_filter(options: ExportOptions, duration: float) -> str:
     )
 
 
+def _circle_crop_filter(options: ExportOptions) -> str:
+    if not options.circle_crop:
+        return ""
+    alpha = "alpha(X,Y)*clip(min(W,H)/2-hypot(X-(W-1)/2,Y-(H-1)/2),0,1)"
+    return f",format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='{alpha}'"
+
+
 def build_filter_graph(options: ExportOptions, duration: float) -> str:
     """Build the FFmpeg graph for trim/remove, crop, scale, and the selected encoder."""
     filters: list[str] = []
@@ -511,7 +608,12 @@ def build_filter_graph(options: ExportOptions, duration: float) -> str:
         else:
             raise MediaError("Removing that interval would leave no frames.")
 
-    processing = f"{source}{_crop_and_scale_filter(options, duration)}{_motion_crop_window_filter(options, duration)}"
+    processing = (
+        f"{source}{_crop_and_scale_filter(options, duration)}"
+        f"{_motion_crop_window_filter(options, duration)}{_circle_crop_filter(options)}"
+    )
+    if options.reverse:
+        processing += ",reverse,setpts=PTS-STARTPTS"
     if options.output_format == "gif" and options.lossy_gif:
         processing += ",hqdn3d=1.5:1.5:6:6"
     filters.append(f"{processing},fps={options.fps}[prepared]")
@@ -525,7 +627,7 @@ def build_filter_graph(options: ExportOptions, duration: float) -> str:
             palette_use += ":diff_mode=rectangle"
         filters.append(f"{palette_use}[outv]")
     else:
-        pixel_format = "yuva420p" if options.output_format == "webm" else "yuv420p"
+        pixel_format = "yuva420p" if options.output_format == "webm" or options.circle_crop else "yuv420p"
         filters.append(f"[prepared]format={pixel_format}[outv]")
     return ";".join(filters)
 
@@ -703,6 +805,93 @@ def export_animation(source: MediaAsset, output_path: Path, options: ExportOptio
     )
 
 
+def export_still_image(source: MediaAsset, output_path: Path, options: ImageExportOptions) -> None:
+    """Crop and resize a still image while stripping source metadata."""
+    try:
+        with Image.open(source.path) as opened:
+            oriented = ImageOps.exif_transpose(opened)
+            image = oriented.convert("RGBA")
+            image = image.crop(
+                (
+                    options.crop_x,
+                    options.crop_y,
+                    options.crop_x + options.crop_width,
+                    options.crop_y + options.crop_height,
+                )
+            )
+            if image.size != (options.output_width, options.output_height):
+                image = image.resize((options.output_width, options.output_height), Image.Resampling.LANCZOS)
+            if options.circle_crop:
+                scale = 4
+                mask = Image.new("L", (image.width * scale, image.height * scale), 0)
+                ImageDraw.Draw(mask).ellipse((0, 0, mask.width - 1, mask.height - 1), fill=255)
+                mask = mask.resize(image.size, Image.Resampling.LANCZOS)
+                image.putalpha(ImageChops.multiply(image.getchannel("A"), mask))
+
+            if options.output_format == "jpeg":
+                flattened = Image.new("RGB", image.size, "white")
+                flattened.paste(image, mask=image.getchannel("A"))
+                flattened.save(output_path, format="JPEG", quality=options.quality, optimize=True, progressive=True)
+            elif options.output_format == "webp":
+                image.save(output_path, format="WEBP", quality=options.quality, method=6)
+            else:
+                image.save(output_path, format="PNG", optimize=True)
+    except (OSError, ValueError) as exc:
+        output_path.unlink(missing_ok=True)
+        raise MediaError("The edited image could not be exported.") from exc
+
+
+def adjust_video_speed(
+    source: MediaAsset,
+    output_path: Path,
+    options: VideoSpeedOptions,
+) -> None:
+    """Create a browser-native video whose timestamps reflect the requested speed."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg_executable(),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source.path),
+        "-map",
+        "0:v:0",
+        "-vf",
+        f"setpts=(PTS-STARTPTS)/{_num(options.speed)},pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+        "-an",
+        "-sn",
+        "-dn",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-fps_mode",
+        "vfr",
+        "-movflags",
+        "+faststart",
+        "-y",
+        str(output_path),
+    ]
+    try:
+        result = _run_ffmpeg(command, 900)
+    except subprocess.TimeoutExpired as exc:
+        output_path.unlink(missing_ok=True)
+        raise MediaError("Changing the video speed timed out. Try a shorter video.") from exc
+    if result.returncode != 0 or not output_path.exists():
+        output_path.unlink(missing_ok=True)
+        detail = (result.stderr or "Unknown FFmpeg error").strip().splitlines()[-1]
+        raise MediaError(f"The video speed could not be changed: {detail[:500]}")
+
+
 MAX_FRAME_EDITOR_FRAMES = 900
 MAX_FRAME_EDITOR_OUTPUT_FRAMES = 18_000
 
@@ -729,11 +918,13 @@ def build_frame_extraction_graph(options: ExportOptions, duration: float) -> str
         else:
             raise MediaError("Removing that interval would leave no frames.")
 
-    filters.append(
+    processing = (
         f"{source}{_crop_and_scale_filter(options, duration)}"
-        f"{_motion_crop_window_filter(options, duration)},"
-        f"fps={options.fps}:eof_action=pass,format=rgba[outv]"
+        f"{_motion_crop_window_filter(options, duration)}{_circle_crop_filter(options)}"
     )
+    if options.reverse:
+        processing += ",reverse,setpts=PTS-STARTPTS"
+    filters.append(f"{processing},fps={options.fps}:eof_action=pass,format=rgba[outv]")
     return ";".join(filters)
 
 
@@ -1162,11 +1353,31 @@ class MediaStore:
 
     def create_export(self, source: MediaAsset, options: ExportOptions) -> MediaAsset:
         with self._lock:
+            if source.kind == "still_image":
+                raise MediaError("Use the image editor to export still images.")
             output = self.export_dir / f"gifmaker-athome-{uuid.uuid4().hex[:10]}.{options.output_format}"
             export_animation(source, output, options)
             source_stem = Path(source.name).stem.strip() or "animation"
             download_name = f"{source_stem}.{options.output_format}"
             return self.register(output, download_name)
+
+    def create_image_export(self, source: MediaAsset, options: ImageExportOptions) -> MediaAsset:
+        with self._lock:
+            suffix = "jpg" if options.output_format == "jpeg" else options.output_format
+            output = self.export_dir / f"gifmaker-athome-image-{uuid.uuid4().hex[:10]}.{suffix}"
+            export_still_image(source, output, options)
+            source_stem = Path(source.name).stem.strip() or "image"
+            return self.register(output, f"{source_stem}.{suffix}")
+
+    def create_speed_adjusted_video(self, source: MediaAsset, options: VideoSpeedOptions) -> MediaAsset:
+        options.validate(source)
+        if math.isclose(options.speed, 1, rel_tol=0, abs_tol=1e-9):
+            return source
+        with self._lock:
+            output = self.export_dir / f"gifmaker-athome-speed-{uuid.uuid4().hex[:10]}.mp4"
+            adjust_video_speed(source, output, options)
+            source_stem = Path(source.name).stem.strip() or "video"
+            return self.register(output, f"{source_stem}-{_num(options.speed)}x.mp4")
 
     def create_frame_sequence(self, source: MediaAsset, options: ExportOptions) -> FrameSequence:
         with self._lock:
@@ -1323,8 +1534,6 @@ _DIRECT_EXTENSIONS = {
     ".mkv",
     ".avi",
     ".m4v",
-    ".gif",
-    ".webp",
 }
 _SOCIAL_HOSTS = {"tenor.com", "www.tenor.com", "giphy.com", "www.giphy.com", "imgur.com"}
 _MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
@@ -1367,8 +1576,6 @@ def _suffix_for_response(response: requests.Response, url: str) -> str:
         "video/mp4": ".mp4",
         "video/webm": ".webm",
         "video/quicktime": ".mov",
-        "image/gif": ".gif",
-        "image/webp": ".webp",
     }
     return known.get(content_type, mimetypes.guess_extension(content_type) or ".bin")
 
@@ -1457,8 +1664,6 @@ def _embedded_media_url(page_url: str) -> str | None:
         ("property", "og:video:url"),
         ("property", "og:video"),
         ("name", "twitter:player:stream"),
-        ("property", "og:image:secure_url"),
-        ("property", "og:image"),
     )
     for attribute, key in keys:
         tag = soup.find("meta", attrs={attribute: key})

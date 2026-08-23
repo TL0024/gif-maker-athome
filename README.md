@@ -4,11 +4,13 @@
 [![CodeQL](https://github.com/TL0024/gif-maker-athome/actions/workflows/codeql.yml/badge.svg)](https://github.com/TL0024/gif-maker-athome/actions/workflows/codeql.yml)
 [![Latest release](https://img.shields.io/github/v/release/TL0024/gif-maker-athome)](https://github.com/TL0024/gif-maker-athome/releases/latest)
 
-GIFmakerAthome is a local-first Windows editor for turning videos and animated images into GIF, animated WebP, or VP9 WebM files. The interface opens in your browser, while the application and media processing stay on `127.0.0.1` on your computer. You can work with local files or media URLs supported by the installed importer.
+GIFmakerAthome is a local-first Windows editor for animations and still images. It turns videos and animated images into GIF, animated WebP, or VP9 WebM files, and can crop, resize, and convert uploaded still images. The interface opens in your browser, while the application and media processing stay on `127.0.0.1` on your computer.
 
 ## What's new in v1.1.0
 
 Version 1.1.0 adds timed motion-crop paths with up to 10 independently sized positions, draggable numbered timing markers, current-time feedback in the crop preview, and smarter frame editing with visual duplicate grouping plus duplicate/delete controls. It also makes successfully imported videos more reliable to preview by selecting compatible streams and generating a local browser-compatible fallback when needed. See the [changelog](CHANGELOG.md) for the complete release notes.
+
+The current development version also accepts local still-image uploads. PNG, JPEG, single-frame WebP, and BMP files open in a dedicated image editor that defaults to a centered 1:1 crop, 512 × 512 output, and WebP export. Video sources have an optional **Reverse playback** setting that reverses the finished cut, including its crop or motion crop, in both direct exports and frame extraction. Link importing remains video-only.
 
 ## Download and run
 
@@ -37,12 +39,16 @@ After setup, local-file editing works offline. URL importing requires an interne
 
 ## Features
 
-- Upload MP4, MOV, WebM, MKV, AVI, GIF, and animated WebP files.
-- Import supported media URLs, including direct media links and compatible websites, with live extraction and download progress.
-- Start every import with the complete original frame selected; optional free, original, 1:1, 16:9, and 9:16 crop controls remain available.
+- Upload MP4, MOV, WebM, MKV, AVI, GIF, WebP, PNG, JPEG, and BMP files.
+- Open single-frame uploads in a focused image editor with crop, resize, and PNG, JPEG, or WebP export.
+- Import video URLs, including direct video links and compatible websites, with live extraction and download progress. Image URLs remain upload-only.
+- Start animation imports with the complete original frame selected; still images default to a centered 1:1 crop. Free, original, 1:1, 16:9, and 9:16 crop controls remain available in both editors.
 - Drag or resize the crop frame directly over the media preview.
+- Choose a square crop (the default) or a circular crop. Circle mode keeps the crop and output at a 1:1 aspect ratio and preserves transparent corners in supported formats.
 - Enable **Motion crop** to smoothly pan and zoom through 2–10 independently positioned, sized, and timed crop keyframes.
 - Keep a selected time range or remove a selected section from the middle.
+- Reverse a video selection after its cut and crop have been applied.
+- Change a video's working speed from 0.5× through 8× and immediately edit against the rebuilt preview and duration.
 - Export adaptive-palette GIF, animated WebP, or silent VP9 WebM.
 - Keep the cropped pixels at their original resolution or use 512 × 512, percentage, and custom-size presets.
 - Choose frame rates from 1 through 30 FPS and adjust format-specific quality.
@@ -55,10 +61,11 @@ After setup, local-file editing works offline. URL importing requires an interne
 
 ## Editing workflow
 
-1. Upload a file or select **Paste a link** and import supported media.
+1. Upload a file or select **Paste a link** and import a supported video. The link extractor accepts videos only; images must be uploaded from the local computer.
    URL imports show their extraction stage first, then downloaded bytes, percentage, transfer speed, and estimated time when the source provides that information.
-2. The crop initially covers the complete source. Drag the crop frame or choose an aspect preset if you want a smaller region. For a moving crop, enable **Motion crop**, set position 1, then use **+ Position** to build a path of up to 10 positions. Every added position inherits the latest position's crop and time so you can extend the motion from where it left off; **− Position** removes the currently selected position while keeping at least one. Motion mode replaces the two range thumbs with numbered timing markers. Select a position tab, then drag its highlighted marker to update that position's **At** time; the other markers remain grey and fixed. At least two positions are required, and the exported animation includes only the time from the first marker through the last marker.
-3. Set the start and end controls. **Keep selected range** exports that interval; **Remove selected middle** joins the sections before and after it.
+   Single-frame image uploads open the image editor with WebP quality 85, a centered 1:1 crop, and 512 × 512 output selected by default. Change the crop, dimensions, format, or quality if needed, then save a PNG, JPEG, or WebP locally. PNG export is lossless; JPEG places transparent pixels on white; WebP preserves transparency. Every image export removes inherited metadata. The animation steps below apply to videos and animated GIF/WebP files.
+2. The crop initially uses the default **Square** shape and covers the complete source. Choose **Circle** for a masked 1:1 crop with transparent corners, or drag the crop frame and use an aspect preset for a smaller square/rectangular region. For a moving crop, enable **Motion crop**, set position 1, then use **+ Position** to build a path of up to 10 positions. Every added position inherits the latest position's crop and time so you can extend the motion from where it left off; **− Position** removes the currently selected position while keeping at least one. Motion mode replaces the two range thumbs with numbered timing markers. Select a position tab, then drag its highlighted marker to update that position's **At** time; the other markers remain grey and fixed. At least two positions are required, and the exported animation includes only the time from the first marker through the last marker.
+3. Set the video speed if needed, then choose the start and end controls against the updated preview timing. **Keep selected range** exports that interval; **Remove selected middle** joins the sections before and after it. For video sources, enable **Reverse playback** to play the complete rendered selection from end to start. Reversal happens after cutting and crop processing, and the frame editor extracts frames in that same reversed order.
 4. Choose GIF, animated WebP, or WebM. WebM, 30 FPS, quality 40, original crop size, and no file-size cap are the defaults.
 5. Adjust resolution, FPS, quality, GIF palette, and the optional size cap.
 6. Select **Create GIF**, **Create WebP**, or **Create WebM**, then preview and download the result.
@@ -76,6 +83,8 @@ After a GIF or WebM export, **Extend into complete loop** creates a second versi
 ## Export and compression details
 
 The size cap is a hard binary limit (`1 KB = 1024 bytes`). GIFmakerAthome first tries the selected settings. If the result is too large, it progressively reduces quality, FPS, and resolution. If the minimum practical settings still cannot satisfy the limit, the incomplete file is removed and the editor asks for a shorter duration or larger cap.
+
+Reverse playback uses FFmpeg's full-sequence reverse filter after the selected cut and crop. It does not change output duration, frame rate, dimensions, format, or size-cap behavior. Because reversal buffers the selected video frames, shorter selections use less memory.
 
 For manually arranged frame sequences, size-cap passes preserve the selected frames and their order. They can reduce palette size or image quality and resolution, but they do not silently discard edited frames.
 
@@ -98,7 +107,7 @@ For Telegram video stickers, select WebM, keep the animation at 30 FPS or lower 
 - The source version stores temporary session data in `.gifmaker-athome-data/`.
 - The executable stores temporary session data in `%LOCALAPPDATA%\GIFmakerAthome\cache`.
 - Startup recreates the temporary imports, exports, previews, and frame folders. Download anything you want to keep before restarting.
-- Link imports reject loopback and private-network addresses.
+- Link imports accept video results only and reject loopback and private-network addresses. Uploaded images never use the network.
 - There are no accounts, analytics, cloud conversion services, or third-party interface assets.
 
 ## Responsible use
@@ -116,7 +125,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-The test suite covers local API protection, browser-tab shutdown and refresh handling, URL-download progress, startup and manual cleanup, upload and download handling, static and independently timed multi-position motion crops, time-range removal, GIF palette generation and optional compression, animated WebP, VP9 WebM, output-size limits, metadata and audio removal, frame extraction and editing, hold timing, and forward/reverse loop generation.
+The test suite covers local API protection, browser-tab shutdown and refresh handling, video-only URL imports, startup and manual cleanup, still-image upload and PNG/JPEG/WebP export, image-editor defaults, square and circular crop output, static and independently timed multi-position motion crops, video speed conversion, time-range removal, reverse-video filter graphs and encoding, GIF palette generation and optional compression, animated WebP, VP9 WebM, output-size limits, metadata and audio removal, frame extraction and editing, hold timing, and forward/reverse loop generation.
 
 Run the security checks with:
 

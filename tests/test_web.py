@@ -4,6 +4,7 @@ import io
 import re
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image
@@ -24,6 +25,12 @@ def animated_webp_bytes() -> bytes:
     output = io.BytesIO()
     frames = [Image.new("RGBA", (36, 36), (255, 0, 0, 180)), Image.new("RGBA", (36, 36), (0, 0, 255, 180))]
     frames[0].save(output, format="WEBP", save_all=True, append_images=frames[1:], duration=120, loop=0)
+    return output.getvalue()
+
+
+def png_bytes() -> bytes:
+    output = io.BytesIO()
+    Image.new("RGBA", (48, 32), (255, 80, 40, 160)).save(output, format="PNG")
     return output.getvalue()
 
 
@@ -101,7 +108,12 @@ def test_link_import_job_reports_download_progress_and_returns_asset(tmp_path: P
         assert finish_import.wait(2)
         destination = store.allocate_import_path("linked.gif")
         destination.write_bytes(animated_gif_bytes())
-        return store.register(destination, "Linked animation.gif")
+        return replace(
+            store.register(destination, "Linked animation.gif"),
+            kind="video",
+            mime="video/mp4",
+            codec="h264",
+        )
 
     monkeypatch.setattr("gifmaker.web.import_media_url", fake_import_media_url)
     app = create_app(tmp_path / "data", testing=True)
@@ -134,7 +146,37 @@ def test_link_import_job_reports_download_progress_and_returns_asset(tmp_path: P
         assert completed is not None
         assert completed["job"]["status"] == "complete"
         assert completed["asset"]["name"] == "Linked animation.gif"
-        assert completed["asset"]["kind"] == "image"
+        assert completed["asset"]["kind"] == "video"
+
+
+def test_link_import_rejects_detected_images(tmp_path: Path, monkeypatch) -> None:
+    def fake_import_media_url(_url, store, _progress_callback=None):
+        destination = store.allocate_import_path("linked.png")
+        destination.write_bytes(png_bytes())
+        return store.register(destination, "Linked image.png")
+
+    monkeypatch.setattr("gifmaker.web.import_media_url", fake_import_media_url)
+    app = create_app(tmp_path / "data", testing=True)
+    headers = {"X-GIFmakerAthome-Token": app.extensions["gifmaker_athome_token"]}
+    with app.test_client() as client:
+        started = client.post(
+            "/api/import",
+            json={"url": "https://example.com/photo.png"},
+            headers=headers,
+        )
+        job_id = started.get_json()["job"]["id"]
+        deadline = time.monotonic() + 2
+        completed = None
+        while time.monotonic() < deadline:
+            completed = client.get(f"/api/import/{job_id}").get_json()
+            if completed["job"]["status"] != "running":
+                break
+            time.sleep(0.01)
+
+        assert completed is not None
+        assert completed["job"]["status"] == "failed"
+        assert "videos only" in completed["job"]["error"]
+        assert "asset" not in completed
 
 
 def test_upload_and_media_delivery(tmp_path: Path) -> None:
@@ -148,6 +190,15 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         assert b"Turn any moment" in page.data
         assert b"Paste a supported media URL" in page.data
         assert b"Only import media you own or are authorized to use" in page.data
+        assert b'accept="video/*,image/*"' in page.data
+        assert b'id="timelineCard"' in page.data
+        assert b'id="animationFpsControl"' in page.data
+        assert b'id="animationSizeControl"' in page.data
+        assert b'id="reversePlaybackOption" type="checkbox"' in page.data
+        assert b'id="videoSpeedControl"' in page.data
+        assert b'id="videoSpeedSelect"' in page.data
+        assert b'<option value="0.5">0.5' in page.data
+        assert b'<option value="8">8' in page.data
         assert b'<option value="webm" selected>' in page.data
         assert b'<option value="30" selected>' in page.data
         assert b'<option value="512square">512' in page.data
@@ -169,6 +220,8 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         assert b'<video id="videoPreview" playsinline muted preload="auto"' in page.data
         assert b'id="currentTimestamp">0:00.00' in page.data
         assert b'id="motionCropEnabled" type="checkbox"' in page.data
+        assert b'data-crop-shape="square" aria-pressed="true"' in page.data
+        assert b'data-crop-shape="circle" aria-pressed="false"' in page.data
         assert b'id="motionCropKeyframes"' in page.data
         assert b'id="addMotionCropKeyframe"' in page.data
         assert b'id="removeMotionCropKeyframe"' in page.data
@@ -203,9 +256,18 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         assert "motionTimelineDrag" in script
         assert "updateMotionCropPreview" in script
         assert "navigator.sendBeacon" in script
+        assert 'asset.kind === "still_image"' in script
+        assert 'api("/api/image-export"' in script
+        assert 'reverse: state.asset.kind === "video" && elements.reversePlaybackOption.checked' in script
+        assert 'circle_crop: state.cropShape === "circle"' in script
+        assert 'api("/api/speed"' in script
+        assert "configureMedia(adjustedAsset" in script
+        assert 'elements.outputFormat.value = stillImage ? "webp" : "webm"' in script
+        assert 'elements.resolutionSelect.value = stillImage ? "512square" : "original"' in script
+        assert 'elements.qualitySelect.value = stillImage ? "85" : "40"' in script
         assert b'class="chip active" data-aspect="original"' in page.data
         assert b'rel="icon"' in page.data
-        assert 'applyCropAspect("original");' in script
+        assert 'applyCropAspect(stillImage ? "1" : "original");' in script
         assert page.headers["Content-Security-Policy"].startswith("default-src 'self'")
 
         uploaded = client.post(
@@ -220,6 +282,14 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         assert asset["height"] == 30
         assert asset["kind"] == "image"
         assert asset["name"] == "My colors.gif"
+
+        speed_response = client.post(
+            "/api/speed",
+            json={"media_id": asset["id"], "speed": 2},
+            headers=headers,
+        )
+        assert speed_response.status_code == 400
+        assert "only for video" in speed_response.get_json()["error"]
 
         served = client.get(asset["media_url"])
         assert served.status_code == 200
@@ -299,6 +369,68 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         assert webp_asset["kind"] == "image"
         assert webp_asset["mime"] == "image/webp"
         assert (webp_asset["width"], webp_asset["height"]) == (36, 36)
+
+        still_upload = client.post(
+            "/api/upload",
+            data={"file": (io.BytesIO(png_bytes()), "photo.png")},
+            headers=headers,
+            content_type="multipart/form-data",
+        )
+        assert still_upload.status_code == 200
+        still_asset = still_upload.get_json()["asset"]
+        assert still_asset["kind"] == "still_image"
+        assert still_asset["mime"] == "image/png"
+        assert still_asset["duration"] == 0
+        assert (still_asset["width"], still_asset["height"]) == (48, 32)
+
+        edited_response = client.post(
+            "/api/image-export",
+            json={
+                "media_id": still_asset["id"],
+                "crop_x": 4,
+                "crop_y": 2,
+                "crop_width": 40,
+                "crop_height": 20,
+                "output_width": 20,
+                "output_height": 10,
+                "output_format": "jpeg",
+                "quality": 85,
+            },
+            headers=headers,
+        )
+        assert edited_response.status_code == 200
+        edited_asset = edited_response.get_json()["asset"]
+        assert edited_asset["kind"] == "still_image"
+        assert edited_asset["mime"] == "image/jpeg"
+        assert edited_asset["name"] == "photo.jpg"
+        assert (edited_asset["width"], edited_asset["height"]) == (20, 10)
+        edited_file = client.get(edited_asset["media_url"])
+        assert edited_file.data.startswith(b"\xff\xd8\xff")
+        edited_file.close()
+
+        circle_response = client.post(
+            "/api/image-export",
+            json={
+                "media_id": still_asset["id"],
+                "crop_x": 8,
+                "crop_y": 0,
+                "crop_width": 32,
+                "crop_height": 32,
+                "circle_crop": True,
+                "output_width": 24,
+                "output_height": 24,
+                "output_format": "png",
+            },
+            headers=headers,
+        )
+        assert circle_response.status_code == 200
+        circle_asset = circle_response.get_json()["asset"]
+        circle_file = client.get(circle_asset["media_url"])
+        with Image.open(io.BytesIO(circle_file.data)) as circle_image:
+            rgba = circle_image.convert("RGBA")
+            assert rgba.getpixel((0, 0))[3] == 0
+            assert rgba.getpixel((12, 12))[3] == 160
+        circle_file.close()
 
         cleared = client.post("/api/clear", headers=headers)
         assert cleared.status_code == 200
