@@ -6,11 +6,11 @@
 
 GIFmakerAthome is a local-first Windows editor for animations and still images. It turns videos and animated images into GIF, animated WebP, or VP9 WebM files, and can crop, resize, and convert uploaded still images. The interface opens in your browser, while the application and media processing stay on `127.0.0.1` on your computer.
 
-## What's new in v1.1.0
+## What's new in v1.2.0
 
-Version 1.1.0 adds timed motion-crop paths with up to 10 independently sized positions, draggable numbered timing markers, current-time feedback in the crop preview, and smarter frame editing with visual duplicate grouping plus duplicate/delete controls. It also makes successfully imported videos more reliable to preview by selecting compatible streams and generating a local browser-compatible fallback when needed. See the [changelog](CHANGELOG.md) for the complete release notes.
+Version 1.2.0 adds video speed adjustment from 0.5× through 8×. Applying a speed rebuilds and loads the working video so the preview, duration, and timeline immediately use the new timing. Square crop remains the default, with a new **Circle** option that shows a masked preview and preserves transparent corners in supported export formats.
 
-The current development version also accepts local still-image uploads. PNG, JPEG, single-frame WebP, and BMP files open in a dedicated image editor that defaults to a centered 1:1 crop, 512 × 512 output, and WebP export. Video sources have an optional **Reverse playback** setting that reverses the finished cut, including its crop or motion crop, in both direct exports and frame extraction. Link importing remains video-only.
+This release also adds a dedicated editor for PNG, JPEG, single-frame WebP, and BMP images, plus optional reverse playback for video selections. Image editing defaults to a centered square crop, 512 × 512 WebP output, and quality 85. Link importing remains video-only. See the [changelog](CHANGELOG.md) for the complete release notes.
 
 ## Download and run
 
