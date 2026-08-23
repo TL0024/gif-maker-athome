@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0d1017">
   <meta name="gifmaker-athome-token" content="{{ request_token }}">
   <meta name="gifmaker-athome-browser-session" content="{{ browser_session_id }}">
-  <title>GIFmakerAthome · Local video to GIF, WebP, and WebM</title>
+  <title>GIFmakerAthome · Local animation and image editor</title>
   <link rel="icon" href="{{ url_for('static', filename='icons/gifmaker-athome.ico') }}" sizes="any">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
@@ -29,7 +29,7 @@
     <section class="hero" id="heroSection">
       <div class="eyebrow"><span>Private by default</span><i></i><span>Frame-precise</span></div>
       <h1>Turn any moment into<br><em>a great loop.</em></h1>
-      <p>Import a video, paste a link, crop what matters, and export—all from your own computer.</p>
+      <p>Upload a video or image, or paste a video link, then crop and export—all from your own computer.</p>
     </section>
 
     <section class="import-panel" id="importPanel" aria-labelledby="importTitle">
@@ -43,12 +43,12 @@
       </div>
 
       <div class="tab-content active" id="fileTab" role="tabpanel">
-        <input id="fileInput" type="file" accept="video/*,image/gif,image/webp" hidden>
+        <input id="fileInput" type="file" accept="video/*,image/*" hidden>
         <button class="drop-zone" id="dropZone" type="button">
           <span class="upload-orbit"><span class="upload-arrow">↑</span></span>
-          <strong>Drop a video or GIF here</strong>
+          <strong>Drop a video or image here</strong>
           <span>or click to browse your files</span>
-          <small>MP4, MOV, WebM, MKV, AVI, GIF, and animated WebP</small>
+          <small>MP4, MOV, WebM, MKV, AVI, GIF, WebP, PNG, JPG, and BMP</small>
         </button>
       </div>
 
@@ -58,7 +58,7 @@
           <input id="linkInput" type="url" placeholder="Paste a supported media URL…" autocomplete="off">
           <button id="importLinkButton" class="primary-button compact" type="button">Import</button>
         </label>
-        <p class="link-help">Only import media you own or are authorized to use. Follow applicable laws, licenses, and source terms.</p>
+        <p class="link-help">Only import media you own or are authorized to use. Video links only; follow applicable laws, licenses, and source terms.</p>
       </div>
     </section>
 
@@ -77,7 +77,7 @@
     <section class="editor" id="editor" hidden>
       <div class="editor-heading">
         <div>
-          <span class="section-kicker">Editor</span>
+          <span class="section-kicker" id="editorKicker">Editor</span>
           <h2 id="mediaName">Your media</h2>
           <p id="mediaMeta">—</p>
         </div>
@@ -89,12 +89,18 @@
           <div class="preview-card">
             <div class="preview-toolbar">
               <div class="toolbar-label"><span class="crop-glyph">⌗</span> Crop</div>
-              <div class="aspect-list" role="group" aria-label="Crop aspect ratio">
-                <button type="button" class="chip" data-aspect="free">Free</button>
-                <button type="button" class="chip active" data-aspect="original">Original</button>
-                <button type="button" class="chip" data-aspect="1">1:1</button>
-                <button type="button" class="chip" data-aspect="1.7777778">16:9</button>
-                <button type="button" class="chip" data-aspect="0.5625">9:16</button>
+              <div class="crop-toolbar-controls">
+                <div class="aspect-list" role="group" aria-label="Crop aspect ratio">
+                  <button type="button" class="chip" data-aspect="free">Free</button>
+                  <button type="button" class="chip active" data-aspect="original">Original</button>
+                  <button type="button" class="chip" data-aspect="1">1:1</button>
+                  <button type="button" class="chip" data-aspect="1.7777778">16:9</button>
+                  <button type="button" class="chip" data-aspect="0.5625">9:16</button>
+                </div>
+                <div class="crop-shape-list" role="group" aria-label="Crop shape">
+                  <button type="button" class="chip active" data-crop-shape="square" aria-pressed="true">Square</button>
+                  <button type="button" class="chip" data-crop-shape="circle" aria-pressed="false">Circle</button>
+                </div>
               </div>
             </div>
             <div class="motion-crop-bar" id="motionCropBar">
@@ -116,7 +122,7 @@
             <div class="stage-wrap">
               <div class="media-stage" id="mediaStage">
                 <video id="videoPreview" playsinline muted preload="auto" hidden></video>
-                <img id="imagePreview" alt="Animated media preview" hidden>
+                <img id="imagePreview" alt="Image preview" hidden>
                 <div class="crop-shade shade-top"></div>
                 <div class="crop-shade shade-left"></div>
                 <div class="crop-shade shade-right"></div>
@@ -138,7 +144,7 @@
             <p class="preview-error" id="previewError" hidden></p>
           </div>
 
-          <div class="timeline-card">
+          <div class="timeline-card" id="timelineCard">
             <div class="card-title-row">
               <div><span class="timeline-glyph">↔</span><strong>Choose frames</strong></div>
               <button type="button" class="text-button" id="previewSelectionButton">▶ Preview cut</button>
@@ -148,6 +154,36 @@
               <label><input type="radio" name="cutMode" value="keep" checked><span>Keep selected range</span></label>
               <label><input type="radio" name="cutMode" value="discard"><span>Remove selected middle</span></label>
             </div>
+
+            <div class="video-speed-control" id="videoSpeedControl" hidden>
+              <label for="videoSpeedSelect">
+                <strong>Video speed</strong>
+                <small>Rebuilds and reloads the video with its new timing.</small>
+              </label>
+              <select id="videoSpeedSelect" class="select-control" aria-label="Video speed">
+                <option value="0.5">0.5×</option>
+                <option value="1" selected>1×</option>
+                <option value="1.5">1.5×</option>
+                <option value="2">2×</option>
+                <option value="2.5">2.5×</option>
+                <option value="3">3×</option>
+                <option value="3.5">3.5×</option>
+                <option value="4">4×</option>
+                <option value="4.5">4.5×</option>
+                <option value="5">5×</option>
+                <option value="5.5">5.5×</option>
+                <option value="6">6×</option>
+                <option value="6.5">6.5×</option>
+                <option value="7">7×</option>
+                <option value="7.5">7.5×</option>
+                <option value="8">8×</option>
+              </select>
+            </div>
+
+            <label class="reverse-playback-option" id="reversePlaybackControl" hidden>
+              <input id="reversePlaybackOption" type="checkbox">
+              <span><strong>Reverse playback</strong><small>Play the finished selection from end to start.</small></span>
+            </label>
 
             <div class="timeline-readout">
               <label>Start <span class="time-input-wrap"><input id="startNumber" type="number" min="0" step="0.01" value="0"><i>s</i></span></label>
@@ -191,7 +227,7 @@
         </div>
 
         <aside class="settings-card">
-          <div class="settings-heading"><span>Export settings</span><small id="formatBadge">WEBM</small></div>
+          <div class="settings-heading"><span id="settingsHeadingLabel">Export settings</span><small id="formatBadge">WEBM</small></div>
 
           <label class="control-label" for="outputFormat">Format</label>
           <select id="outputFormat" class="select-control">
@@ -222,18 +258,20 @@
 
           <div class="separator"></div>
 
-          <label class="control-label" for="fpsSelect">Frame rate</label>
-          <select id="fpsSelect" class="select-control">
-            <option value="1">1 FPS · minimum</option>
-            <option value="2">2 FPS · extreme compression</option>
-            <option value="5">5 FPS · very small</option>
-            <option value="8">8 FPS · compact</option>
-            <option value="10">10 FPS · smaller</option>
-            <option value="15">15 FPS · balanced</option>
-            <option value="20">20 FPS · smooth</option>
-            <option value="24">24 FPS · very smooth</option>
-            <option value="30" selected>30 FPS · default</option>
-          </select>
+          <div class="settings-section" id="animationFpsControl">
+            <label class="control-label" for="fpsSelect">Frame rate</label>
+            <select id="fpsSelect" class="select-control">
+              <option value="1">1 FPS · minimum</option>
+              <option value="2">2 FPS · extreme compression</option>
+              <option value="5">5 FPS · very small</option>
+              <option value="8">8 FPS · compact</option>
+              <option value="10">10 FPS · smaller</option>
+              <option value="15">15 FPS · balanced</option>
+              <option value="20">20 FPS · smooth</option>
+              <option value="24">24 FPS · very smooth</option>
+              <option value="30" selected>30 FPS · default</option>
+            </select>
+          </div>
 
           <div id="qualityControl">
             <label class="control-label spaced" id="qualityLabel" for="qualitySelect">WebM quality</label>
@@ -291,22 +329,24 @@
             <p id="gifCompressionNote">Switch the output format to GIF to use these techniques.</p>
           </div>
 
-          <div class="separator"></div>
+          <div class="settings-section" id="animationSizeControl">
+            <div class="separator"></div>
 
-          <label class="control-label" for="sizeLimitSelect">File-size cap</label>
-          <select id="sizeLimitSelect" class="select-control">
-            <option value="none" selected>No hard cap</option>
-            <option value="256">Maximum 256 KB · Telegram</option>
-            <option value="512">Maximum 512 KB</option>
-            <option value="1024">Maximum 1 MB</option>
-            <option value="2048">Maximum 2 MB</option>
-            <option value="custom">Custom limit</option>
-          </select>
-          <label class="size-cap-custom" id="customSizeLimitControl" for="customSizeLimit" hidden>
-            <span>Maximum size</span>
-            <span class="size-input-wrap"><input id="customSizeLimit" type="number" min="16" max="1048576" value="256"><i>KB</i></span>
-          </label>
-          <p class="control-note">With a cap, quality is reduced first, followed by FPS and resolution only as needed. Extra encoding passes can take longer. Audio, metadata, subtitles, chapters, and data tracks are always removed.</p>
+            <label class="control-label" for="sizeLimitSelect">File-size cap</label>
+            <select id="sizeLimitSelect" class="select-control">
+              <option value="none" selected>No hard cap</option>
+              <option value="256">Maximum 256 KB · Telegram</option>
+              <option value="512">Maximum 512 KB</option>
+              <option value="1024">Maximum 1 MB</option>
+              <option value="2048">Maximum 2 MB</option>
+              <option value="custom">Custom limit</option>
+            </select>
+            <label class="size-cap-custom" id="customSizeLimitControl" for="customSizeLimit" hidden>
+              <span>Maximum size</span>
+              <span class="size-input-wrap"><input id="customSizeLimit" type="number" min="16" max="1048576" value="256"><i>KB</i></span>
+            </label>
+            <p class="control-note">With a cap, quality is reduced first, followed by FPS and resolution only as needed. Extra encoding passes can take longer. Audio, metadata, subtitles, chapters, and data tracks are always removed.</p>
+          </div>
 
           <div class="export-summary">
             <span>Expected output</span>

@@ -2,6 +2,26 @@
 
 All notable changes to GIFmakerAthome are documented here. Releases follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- Local still-image uploads for PNG, JPEG, single-frame WebP, and BMP files. Animated GIF, animated WebP, and APNG files continue through the animation workflow.
+- A dedicated still-image editor with crop, resize, and PNG, JPEG, or WebP export.
+- An optional reverse-playback setting for video sources. The normal export and visual frame editor both use the reversed rendered selection.
+- Video speed adjustment from 0.5× through 8×. Applying a speed creates and loads a new local working video so preview and timeline timing match.
+- Optional circular crops with a matching masked preview and transparent corners in alpha-capable output formats. Square cropping remains the default.
+
+### Changed
+
+- The image editor now defaults to a centered 1:1 crop, 512 × 512 output, WebP format, and quality 85.
+- URL importing is explicitly video-only. Image files must be selected in the Upload tab, and page extraction no longer falls back to image metadata.
+- Upload and editor copy now distinguishes video, animated-image, and still-image workflows.
+
+### Security and privacy
+
+- Still-image exports are generated locally with inherited metadata removed. JPEG exports flatten transparency onto white.
+
 ## [1.1.0] - 2026-07-24
 
 ### Added
@@ -29,5 +49,6 @@ All notable changes to GIFmakerAthome are documented here. Releases follow seman
 
 - Initial public release with local file and URL imports, crop and time editing, GIF/animated WebP/VP9 WebM export, size targeting, frame editing, complete-loop generation, and a packaged Windows executable.
 
+[Unreleased]: https://github.com/TL0024/gif-maker-athome/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/TL0024/gif-maker-athome/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/TL0024/gif-maker-athome/releases/tag/v1.0.0

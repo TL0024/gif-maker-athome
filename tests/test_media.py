@@ -15,6 +15,7 @@ from gifmaker.media import (
     MediaError,
     MediaStore,
     MotionCropKeyframe,
+    VideoSpeedOptions,
     _collapse_consecutive_frames,
     _download_direct,
     _run_ffmpeg,
@@ -201,6 +202,25 @@ def test_webm_filter_preserves_alpha_capable_pixel_format() -> None:
     assert "palettegen" not in graph
 
 
+def test_circle_crop_adds_an_alpha_mask_to_animation_and_frame_extraction() -> None:
+    options = sample_options(circle_crop=True, output_width=60, output_height=60)
+    graph = build_filter_graph(options, duration=3)
+    frame_graph = build_frame_extraction_graph(options, duration=3)
+
+    assert "format=rgba,geq=" in graph
+    assert "hypot(X-(W-1)/2,Y-(H-1)/2)" in graph
+    assert "format=rgba,geq=" in frame_graph
+
+
+def test_reverse_filter_is_applied_to_animation_and_frame_editor_output() -> None:
+    options = sample_options(reverse=True)
+    graph = build_filter_graph(options, duration=3)
+    frame_graph = build_frame_extraction_graph(options, duration=3)
+
+    assert ",reverse,setpts=PTS-STARTPTS,fps=12[prepared]" in graph
+    assert ",reverse,setpts=PTS-STARTPTS,fps=12:eof_action=pass,format=rgba[outv]" in frame_graph
+
+
 def test_discard_filter_joins_both_outer_segments() -> None:
     graph = build_filter_graph(sample_options(discard_middle=True), duration=3)
     assert "trim=start=0:end=0.5" in graph
@@ -260,13 +280,21 @@ def test_export_payload_defaults_to_webm_and_optional_optimizations_off(tmp_path
     assert options.output_format == "webm"
     assert options.fps == 30
     assert options.quality == 40
+    assert options.reverse is False
+    assert options.circle_crop is False
     assert options.max_size_kb is None
     assert options.reduce_colors is False
     assert options.lossy_gif is False
     assert options.optimize_unchanged_pixels is False
     assert options.remove_duplicate_frames is False
+    with pytest.raises(MediaError, match="only for video sources"):
+        ExportOptions.from_payload({"reverse": True}, asset)
+    video_asset = replace(asset, kind="video", mime="video/mp4", codec="h264", duration=3)
+    assert ExportOptions.from_payload({"reverse": True}, video_asset).reverse is True
     with pytest.raises(MediaError, match="between 16 KB"):
         ExportOptions.from_payload({"max_size_kb": 15}, asset)
+    with pytest.raises(MediaError, match="equal output width and height"):
+        ExportOptions.from_payload({"circle_crop": True}, asset)
     with pytest.raises(MediaError, match="motion crop"):
         ExportOptions.from_payload({"motion_crop": True, "crop_end_x": 1}, asset)
     motion = ExportOptions.from_payload(
@@ -335,6 +363,21 @@ def test_export_payload_defaults_to_webm_and_optional_optimizations_off(tmp_path
             },
             asset,
         )
+
+
+def test_video_speed_options_accept_only_video_sources_between_half_and_eight_times(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.gif"
+    make_animated_gif(source_path)
+    asset = MediaStore(tmp_path / "data").register(source_path)
+    video = replace(asset, kind="video", mime="video/mp4", codec="h264", duration=3)
+
+    assert VideoSpeedOptions.from_payload({"speed": 0.5}, video).speed == 0.5
+    assert VideoSpeedOptions.from_payload({"speed": 8}, video).speed == 8
+    with pytest.raises(MediaError, match="only for video"):
+        VideoSpeedOptions.from_payload({"speed": 2}, asset)
+    for invalid_speed in (0.49, 8.01, float("nan"), "fast"):
+        with pytest.raises(MediaError, match=r"between 0\.5x and 8x"):
+            VideoSpeedOptions.from_payload({"speed": invalid_speed}, video)
 
 
 def test_visually_unchanged_frames_collapse_without_changing_unique_frame_timing(tmp_path: Path) -> None:
@@ -497,6 +540,14 @@ def test_real_ffmpeg_exports_gif_webp_and_webm_with_crop_resize_and_middle_remov
     source = store.register(source_path, "My Holiday Clip.mp4")
     assert source.codec == "h264"
     assert not source.browser_preview_required
+
+    faster_source = store.create_speed_adjusted_video(source, VideoSpeedOptions(speed=2))
+    assert faster_source.name == "My Holiday Clip-2x.mp4"
+    assert faster_source.mime == "video/mp4"
+    assert faster_source.codec == "h264"
+    assert faster_source.duration == pytest.approx(source.duration / 2, abs=0.2)
+    assert not faster_source.browser_preview_required
+
     hevc_source = replace(source, codec="hevc")
     assert hevc_source.browser_preview_required
     assert hevc_source.as_api_dict()["browser_preview_required"] is True
@@ -508,6 +559,16 @@ def test_real_ffmpeg_exports_gif_webp_and_webm_with_crop_resize_and_middle_remov
     assert gif_result.name == "My Holiday Clip.gif"
     assert (gif_result.width, gif_result.height) == (60, 40)
     assert gif_result.duration == pytest.approx(1.6, abs=0.25)
+
+    circle_result = store.create_export(source, replace(options, circle_crop=True, output_height=60))
+    with Image.open(circle_result.path) as circle_animation:
+        circle_frame = circle_animation.convert("RGBA")
+        assert circle_frame.getpixel((0, 0))[3] == 0
+        assert circle_frame.getpixel((circle_frame.width // 2, circle_frame.height // 2))[3] == 255
+
+    reversed_result = store.create_export(source, replace(options, reverse=True))
+    assert reversed_result.path.read_bytes().startswith(b"GIF8")
+    assert reversed_result.duration == pytest.approx(gif_result.duration, abs=0.25)
 
     motion_result = store.create_export(
         source,

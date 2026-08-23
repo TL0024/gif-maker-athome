@@ -13,7 +13,7 @@
     loadingProgressText: $("loadingProgressText"), editor: $("editor"),
     result: $("resultPanel"), fileInput: $("fileInput"), dropZone: $("dropZone"),
     linkInput: $("linkInput"), importLinkButton: $("importLinkButton"), mediaName: $("mediaName"),
-    mediaMeta: $("mediaMeta"), stage: $("mediaStage"), video: $("videoPreview"),
+    mediaMeta: $("mediaMeta"), editorKicker: $("editorKicker"), stage: $("mediaStage"), video: $("videoPreview"),
     image: $("imagePreview"), previewError: $("previewError"), cropBox: $("cropBox"),
     cropSize: $("cropSize"), currentTimestamp: $("currentTimestamp"),
     motionCropBar: $("motionCropBar"), motionCropEnabled: $("motionCropEnabled"),
@@ -24,12 +24,16 @@
     startNumber: $("startNumber"), endNumber: $("endNumber"), rangeFill: $("rangeFill"),
     motionTimelineMarkers: $("motionTimelineMarkers"),
     selectedDuration: $("selectedDuration"), totalDurationLabel: $("totalDurationLabel"),
-    modeHint: $("modeHint"), previewSelectionButton: $("previewSelectionButton"),
+    modeHint: $("modeHint"), previewSelectionButton: $("previewSelectionButton"), timelineCard: $("timelineCard"),
+    videoSpeedControl: $("videoSpeedControl"), videoSpeedSelect: $("videoSpeedSelect"),
+    reversePlaybackControl: $("reversePlaybackControl"), reversePlaybackOption: $("reversePlaybackOption"),
     openFrameEditorButton: $("openFrameEditorButton"), frameEditorPanel: $("frameEditorPanel"),
     closeFrameEditorButton: $("closeFrameEditorButton"), frameEditorSummary: $("frameEditorSummary"),
     frameEditorStatus: $("frameEditorStatus"), frameGrid: $("frameGrid"),
     resetFramesButton: $("resetFramesButton"), exportFramesButton: $("exportFramesButton"),
     outputFormat: $("outputFormat"), formatBadge: $("formatBadge"), formatNote: $("formatNote"),
+    settingsHeadingLabel: $("settingsHeadingLabel"), animationFpsControl: $("animationFpsControl"),
+    animationSizeControl: $("animationSizeControl"),
     qualityControl: $("qualityControl"), qualityLabel: $("qualityLabel"),
     gifColorsControl: $("gifColorsControl"), qualitySelect: $("qualitySelect"),
     gifCompressionPanel: $("gifCompressionPanel"), gifCompressionNote: $("gifCompressionNote"),
@@ -54,6 +58,9 @@
 
   const state = {
     asset: null,
+    speedSourceAsset: null,
+    videoSpeed: 1,
+    cropShape: "square",
     crop: { x: 0, y: 0, w: 100, h: 100 },
     cropAspect: null,
     motionCropEnabled: false,
@@ -195,6 +202,10 @@
     let unit = 0;
     while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
     return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+  }
+
+  function isStillImage() {
+    return state.asset?.kind === "still_image";
   }
 
   function minimumGap() {
@@ -547,7 +558,64 @@
     renderCrop();
   }
 
+  function cropWithAspect(crop, target) {
+    const sourceRatio = state.asset.width / state.asset.height;
+    const centerX = crop.x + crop.w / 2;
+    const centerY = crop.y + crop.h / 2;
+    let width = crop.w;
+    let height = width * sourceRatio / target;
+    if (height > crop.h) {
+      height = crop.h;
+      width = height * target / sourceRatio;
+    }
+    return {
+      x: Math.max(0, Math.min(100 - width, centerX - width / 2)),
+      y: Math.max(0, Math.min(100 - height, centerY - height / 2)),
+      w: width,
+      h: height
+    };
+  }
+
+  function updateCropShapeControls() {
+    const circle = state.cropShape === "circle";
+    document.querySelectorAll("[data-crop-shape]").forEach((button) => {
+      const active = button.dataset.cropShape === state.cropShape;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    elements.stage.classList.toggle("circle-crop", circle);
+    elements.dimensionLock.disabled = circle;
+    elements.dimensionLock.title = circle ? "Circle crops keep equal output dimensions" : "";
+  }
+
+  function setCropShape(shape) {
+    if (shape !== "square" && shape !== "circle") return;
+    state.cropShape = shape;
+    if (shape === "circle") {
+      state.cropAspect = 1;
+      document.querySelectorAll("[data-aspect]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.aspect === "1");
+      });
+      if (state.motionCropEnabled) {
+        state.motionCropKeyframes = state.motionCropKeyframes.map((crop) => cropWithAspect(crop, 1));
+        state.crop = cloneCrop(state.motionCropKeyframes[state.motionCropIndex]);
+      } else {
+        state.crop = cropWithAspect(state.crop, 1);
+      }
+      state.dimensionLocked = true;
+      elements.dimensionLock.classList.add("active");
+      elements.dimensionLock.setAttribute("aria-pressed", "true");
+      renderCrop();
+    }
+    updateCropShapeControls();
+    updateOutputSummary();
+  }
+
   function applyCropAspect(value) {
+    if (state.cropShape === "circle" && value !== "1") {
+      state.cropShape = "square";
+      updateCropShapeControls();
+    }
     document.querySelectorAll("[data-aspect]").forEach((button) => {
       button.classList.toggle("active", button.dataset.aspect === value);
     });
@@ -557,22 +625,7 @@
     }
     const target = value === "original" ? state.asset.width / state.asset.height : Number(value);
     state.cropAspect = target;
-    const sourceRatio = state.asset.width / state.asset.height;
-    const current = state.crop;
-    const centerX = current.x + current.w / 2;
-    const centerY = current.y + current.h / 2;
-    let width = current.w;
-    let height = width * sourceRatio / target;
-    if (height > current.h) {
-      height = current.h;
-      width = height * target / sourceRatio;
-    }
-    state.crop = {
-      x: Math.max(0, Math.min(100 - width, centerX - width / 2)),
-      y: Math.max(0, Math.min(100 - height, centerY - height / 2)),
-      w: width,
-      h: height
-    };
+    state.crop = cropWithAspect(state.crop, target);
     syncMotionCropKeyframe();
     renderCrop();
   }
@@ -665,7 +718,7 @@
       elements.outputWidth.disabled = true;
       elements.outputHeight.disabled = true;
       elements.resolutionNote.textContent = squarePreset
-        ? "Exports a square 512 × 512 animation. Selecting this preset also applies a 1:1 crop."
+        ? `Exports a square 512 × 512 ${isStillImage() ? "image" : "animation"}. Selecting this preset also applies a 1:1 crop.`
         : mode === "original"
         ? "No resizing—the cropped pixels stay at source resolution."
         : `Scaled to ${Math.round(factor * 100)}% of the cropped source.`;
@@ -687,8 +740,18 @@
     if (!state.asset) return;
     const width = Number(elements.outputWidth.value) || outputReferenceCropPixels().w;
     const height = Number(elements.outputHeight.value) || outputReferenceCropPixels().h;
+    const shape = state.cropShape === "circle" ? " · circle" : "";
+    if (isStillImage()) {
+      const format = elements.outputFormat.value;
+      const formatName = { png: "PNG", jpeg: "JPEG", webp: "WebP" }[format] || "PNG";
+      elements.outputSummary.textContent = `${formatName} · ${width} × ${height}${shape}`;
+      elements.outputDurationSummary.textContent = format === "png"
+        ? "Lossless image · source metadata removed"
+        : `Quality ${elements.qualitySelect.value} · source metadata removed`;
+      return;
+    }
     const paletteBased = elements.outputFormat.value === "gif";
-    elements.outputSummary.textContent = `${elements.outputFormat.value.toUpperCase()} · ${width} × ${height} · ${elements.fpsSelect.value} FPS`;
+    elements.outputSummary.textContent = `${elements.outputFormat.value.toUpperCase()} · ${width} × ${height}${shape} · ${elements.fpsSelect.value} FPS`;
     const detail = paletteBased
       ? `${finalOutputDuration().toFixed(2)} seconds · ${elements.colorsSelect.value} colors`
       : `${finalOutputDuration().toFixed(2)} seconds · quality ${elements.qualitySelect.value}`;
@@ -696,7 +759,8 @@
     const techniqueCount = elements.outputFormat.value === "gif"
       ? gifTechniqueInputs().filter((input) => input.checked).length
       : 0;
-    elements.outputDurationSummary.textContent = `${detail}${techniqueCount ? ` · ${techniqueCount} auto optimization${techniqueCount === 1 ? "" : "s"}` : ""}${cap ? ` · cap ≤ ${cap} KB` : ""}`;
+    const direction = elements.reversePlaybackOption.checked ? " · reversed" : "";
+    elements.outputDurationSummary.textContent = `${detail}${direction}${techniqueCount ? ` · ${techniqueCount} auto optimization${techniqueCount === 1 ? "" : "s"}` : ""}${cap ? ` · cap ≤ ${cap} KB` : ""}`;
     updateFrameEditorSummary();
   }
 
@@ -722,10 +786,28 @@
 
   function updateFormatControls() {
     const format = elements.outputFormat.value;
+    if (isStillImage()) {
+      const formatName = { png: "PNG", jpeg: "JPEG", webp: "WebP" }[format] || "PNG";
+      elements.formatBadge.textContent = formatName.toUpperCase();
+      elements.qualityControl.hidden = format === "png";
+      elements.gifColorsControl.hidden = true;
+      elements.gifCompressionPanel.hidden = true;
+      elements.qualityLabel.textContent = `${formatName} quality`;
+      elements.formatNote.textContent = {
+        png: "PNG preserves transparency and image detail without lossy compression.",
+        jpeg: "JPEG is compact for photos. Transparent areas are placed on white.",
+        webp: "WebP supports transparency and usually creates smaller image files."
+      }[format];
+      gifTechniqueInputs().forEach((input) => { input.disabled = true; });
+      elements.exportButtonLabel.textContent = `Save ${formatName}`;
+      updateOutputSummary();
+      return;
+    }
     const formatName = { gif: "GIF", webp: "WebP", webm: "WebM" }[format] || "GIF";
     elements.formatBadge.textContent = formatName.toUpperCase();
     elements.qualityControl.hidden = format === "gif";
     elements.gifColorsControl.hidden = format !== "gif";
+    elements.gifCompressionPanel.hidden = false;
     elements.qualityLabel.textContent = format === "webm" ? "WebM quality" : "WebP quality";
     elements.formatNote.textContent = {
       gif: "GIF offers the widest compatibility with an adaptive color palette.",
@@ -742,25 +824,70 @@
     updateOutputSummary();
   }
 
-  function configureMedia(asset) {
+  function configureEditorMode(stillImage) {
+    const formats = stillImage
+      ? [
+          ["webp", "WebP · default · compact and transparent"],
+          ["png", "PNG · lossless and transparent"],
+          ["jpeg", "JPEG · best for photos"],
+        ]
+      : [
+          ["webm", "WebM · default"],
+          ["gif", "GIF · widest compatibility"],
+          ["webp", "Animated WebP · smaller files"]
+        ];
+    elements.outputFormat.replaceChildren(...formats.map(([value, label], index) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      option.selected = index === 0;
+      return option;
+    }));
+    elements.editorKicker.textContent = stillImage ? "Image editor" : "Animation editor";
+    elements.settingsHeadingLabel.textContent = stillImage ? "Image export settings" : "Export settings";
+    elements.timelineCard.hidden = stillImage;
+    elements.animationFpsControl.hidden = stillImage;
+    elements.animationSizeControl.hidden = stillImage;
+  }
+
+  function configureMedia(asset, speedContext = null) {
+    const preserveEdits = Boolean(speedContext?.preserveEdits && state.asset?.kind === "video");
+    const previousSpeed = state.videoSpeed || 1;
+    const previousTimes = preserveEdits ? selectedTimes() : null;
     resetFrameEditor();
     state.asset = asset;
+    state.speedSourceAsset = asset.kind === "video" ? speedContext?.sourceAsset || asset : null;
+    state.videoSpeed = asset.kind === "video" ? Number(speedContext?.speed || 1) : 1;
     state.resultAsset = null;
     state.forwardAsset = null;
     state.extendedAsset = null;
     state.loopExtended = false;
-    state.crop = { x: 0, y: 0, w: 100, h: 100 };
-    state.cropAspect = null;
-    state.motionCropEnabled = false;
-    state.motionCropIndex = 0;
-    state.motionCropKeyframes = [];
-    state.motionCropTimings = [];
+    if (!preserveEdits) {
+      state.cropShape = "square";
+      state.crop = { x: 0, y: 0, w: 100, h: 100 };
+      state.cropAspect = null;
+      state.motionCropEnabled = false;
+      state.motionCropIndex = 0;
+      state.motionCropKeyframes = [];
+      state.motionCropTimings = [];
+    }
     state.motionTimelineDrag = null;
     state.previewFallbackTried = false;
     state.previewing = false;
+    const stillImage = asset.kind === "still_image";
+    if (!preserveEdits) configureEditorMode(stillImage);
+    elements.videoSpeedControl.hidden = asset.kind !== "video";
+    elements.videoSpeedSelect.value = String(state.videoSpeed);
+    elements.videoSpeedSelect.disabled = false;
+    elements.reversePlaybackControl.hidden = asset.kind !== "video";
+    if (!preserveEdits) elements.reversePlaybackOption.checked = false;
     elements.previewError.hidden = true;
     elements.mediaName.textContent = asset.name;
-    elements.mediaMeta.textContent = `${asset.width} × ${asset.height} · ${formatClock(asset.duration)} · ${asset.kind === "video" ? "Video" : "Animated image"}`;
+    const mediaType = asset.kind === "video" ? "Video" : stillImage ? "Still image" : "Animated image";
+    const speedLabel = state.videoSpeed === 1 ? "" : ` · ${state.videoSpeed}× speed`;
+    elements.mediaMeta.textContent = stillImage
+      ? `${asset.width} × ${asset.height} · ${mediaType}`
+      : `${asset.width} × ${asset.height} · ${formatClock(asset.duration)} · ${mediaType}${speedLabel}`;
     elements.stage.style.setProperty("--ratio", asset.width / asset.height);
 
     elements.video.pause();
@@ -770,6 +897,7 @@
     elements.image.hidden = asset.kind === "video";
     elements.currentTimestamp.hidden = asset.kind !== "video";
     elements.motionCropBar.hidden = asset.kind !== "video";
+    updateCropShapeControls();
     updateMotionCropControls();
     updatePreviewTimestamp(0);
     if (asset.kind === "video") {
@@ -792,20 +920,40 @@
     ]) {
       input.max = duration.toFixed(3);
     }
-    elements.startRange.value = "0";
-    elements.endRange.value = duration.toFixed(3);
+    if (preserveEdits && previousTimes) {
+      const timingScale = previousSpeed / state.videoSpeed;
+      const selectedWholeSource = previousTimes.start <= 0.001 &&
+        previousTimes.end >= Number(speedContext.previousDuration) - 0.001;
+      elements.startRange.value = selectedWholeSource
+        ? "0"
+        : Math.min(duration, previousTimes.start * timingScale).toFixed(3);
+      elements.endRange.value = selectedWholeSource
+        ? duration.toFixed(3)
+        : Math.min(duration, previousTimes.end * timingScale).toFixed(3);
+    } else {
+      elements.startRange.value = "0";
+      elements.endRange.value = duration.toFixed(3);
+    }
     elements.totalDurationLabel.textContent = formatClock(duration);
-    document.querySelector('input[name="cutMode"][value="keep"]').checked = true;
-    elements.outputFormat.value = "webm";
-    elements.fpsSelect.value = "30";
-    elements.qualitySelect.value = "40";
-    elements.sizeLimitSelect.value = "none";
-    elements.customSizeLimitControl.hidden = true;
-    elements.resolutionSelect.value = "original";
-    gifTechniqueInputs().forEach((input) => { input.checked = false; });
-    updateFormatControls();
-    applyCropAspect("original");
-    updateTimeline();
+    if (!preserveEdits) {
+      document.querySelector('input[name="cutMode"][value="keep"]').checked = true;
+      elements.outputFormat.value = stillImage ? "webp" : "webm";
+      elements.fpsSelect.value = "30";
+      elements.qualitySelect.value = stillImage ? "85" : "40";
+      elements.sizeLimitSelect.value = "none";
+      elements.customSizeLimitControl.hidden = true;
+      elements.resolutionSelect.value = stillImage ? "512square" : "original";
+      gifTechniqueInputs().forEach((input) => { input.checked = false; });
+      updateFormatControls();
+      applyCropAspect(stillImage ? "1" : "original");
+    } else {
+      paintCrop(state.crop);
+      syncResolutionFromCrop();
+    }
+    if (!stillImage) {
+      if (preserveEdits) setTimes(elements.startRange.value, elements.endRange.value);
+      else updateTimeline();
+    }
     elements.loading.hidden = true;
     elements.clearCacheButton.disabled = false;
     elements.hero.hidden = true;
@@ -813,6 +961,51 @@
     elements.result.hidden = true;
     elements.editor.hidden = false;
     elements.editor.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  async function changeVideoSpeed() {
+    if (!state.asset || state.asset.kind !== "video") return;
+    const requestedSpeed = Number(elements.videoSpeedSelect.value);
+    const previousSpeed = state.videoSpeed;
+    if (!Number.isFinite(requestedSpeed) || requestedSpeed < 0.5 || requestedSpeed > 8) {
+      elements.videoSpeedSelect.value = String(previousSpeed);
+      showToast("Choose a video speed between 0.5× and 8×.");
+      return;
+    }
+    if (requestedSpeed === previousSpeed) return;
+
+    const sourceAsset = state.speedSourceAsset || state.asset;
+    const previousDuration = state.asset.duration;
+    elements.video.pause();
+    elements.videoSpeedSelect.disabled = true;
+    setLoading(
+      true,
+      `Changing video speed to ${requestedSpeed}×…`,
+      "Rebuilding the local working video so the preview and timeline use the new timing."
+    );
+    try {
+      const adjustedAsset = requestedSpeed === 1
+        ? sourceAsset
+        : (await api("/api/speed", {
+            method: "POST",
+            body: JSON.stringify({ media_id: sourceAsset.id, speed: requestedSpeed })
+          })).asset;
+      configureMedia(adjustedAsset, {
+        preserveEdits: true,
+        sourceAsset,
+        speed: requestedSpeed,
+        previousDuration
+      });
+      showToast(`Loaded the ${requestedSpeed}× video with its updated timing.`, "success");
+    } catch (error) {
+      elements.loading.hidden = true;
+      elements.clearCacheButton.disabled = false;
+      elements.editor.hidden = false;
+      elements.videoSpeedSelect.value = String(previousSpeed);
+      showToast(error.message);
+    } finally {
+      elements.videoSpeedSelect.disabled = false;
+    }
   }
 
   async function uploadFile(file) {
@@ -883,6 +1076,8 @@
       start,
       end,
       discard_middle: isDiscardMode(),
+      reverse: state.asset.kind === "video" && elements.reversePlaybackOption.checked,
+      circle_crop: state.cropShape === "circle",
       crop_x: crop.x,
       crop_y: crop.y,
       crop_width: crop.w,
@@ -970,6 +1165,8 @@
     elements.resultVideo.pause();
     elements.resultVideo.removeAttribute("src");
     state.asset = null;
+    state.speedSourceAsset = null;
+    state.videoSpeed = 1;
     state.resultAsset = null;
     state.forwardAsset = null;
     state.extendedAsset = null;
@@ -994,7 +1191,7 @@
       `${totalTicks} hold ticks · ${duration.toFixed(2)}s at ${state.frameSequence.fps} FPS.`;
     elements.frameEditorStatus.className = `frame-editor-status${stale || !supported ? " stale" : ""}`;
     if (stale) {
-      elements.frameEditorStatus.textContent = "Crop, timing, resolution, or FPS changed. Build the frame list again before compiling.";
+      elements.frameEditorStatus.textContent = "Crop, timing, playback direction, resolution, or FPS changed. Build the frame list again before compiling.";
     } else if (!supported) {
       elements.frameEditorStatus.textContent = "Choose GIF or WebM in Export settings to compile edited frames.";
     } else {
@@ -1179,7 +1376,8 @@
       elements.extendLoopButton.disabled = false;
       elements.extendLoopButton.innerHTML = "<span>↔</span> Extend into complete loop";
       state.forwardResultTitle = `Your frame-edited ${formatName} is finished.`;
-      state.forwardResultMeta = `${result.width} × ${result.height} · ${result.duration.toFixed(2)}s · ${state.frameItems.length} arranged frames · ${readableBytes(result.size) || "ready to download"}${sizeCap ? ` · ${sizeCap} KB cap` : ""}`;
+      const reversed = elements.reversePlaybackOption.checked ? " · reversed source" : "";
+      state.forwardResultMeta = `${result.width} × ${result.height} · ${result.duration.toFixed(2)}s · ${state.frameItems.length} arranged frames${reversed} · ${readableBytes(result.size) || "ready to download"}${sizeCap ? ` · ${sizeCap} KB cap` : ""}`;
       elements.resultTitle.textContent = state.forwardResultTitle;
       elements.resultMeta.textContent = state.forwardResultMeta;
       elements.editor.hidden = true;
@@ -1193,6 +1391,51 @@
       elements.openFrameEditorButton.disabled = false;
       elements.openFrameEditorButton.textContent = "Rebuild frames";
       updateFrameEditorSummary();
+    }
+  }
+
+  async function exportImage() {
+    if (!state.asset || !isStillImage()) return;
+    const crop = cropPixels();
+    const payload = {
+      media_id: state.asset.id,
+      crop_x: crop.x,
+      crop_y: crop.y,
+      crop_width: crop.w,
+      crop_height: crop.h,
+      circle_crop: state.cropShape === "circle",
+      output_width: Number(elements.outputWidth.value),
+      output_height: Number(elements.outputHeight.value),
+      output_format: elements.outputFormat.value,
+      quality: Number(elements.qualitySelect.value)
+    };
+    const formatName = { png: "PNG", jpeg: "JPEG", webp: "WebP" }[payload.output_format] || "PNG";
+    elements.exportButton.disabled = true;
+    elements.clearCacheButton.disabled = true;
+    elements.exportButtonLabel.textContent = "Saving locally…";
+    elements.exportButtonIcon.textContent = "◌";
+    try {
+      const data = await api("/api/image-export", { method: "POST", body: JSON.stringify(payload) });
+      const result = data.asset;
+      displayResultMedia(result);
+      state.forwardAsset = result;
+      state.extendedAsset = null;
+      state.loopExtended = false;
+      elements.extendLoopButton.hidden = true;
+      state.forwardResultTitle = `Your edited ${formatName} is ready.`;
+      state.forwardResultMeta = `${result.width} × ${result.height} · ${readableBytes(result.size) || "ready to download"} · metadata removed`;
+      elements.resultTitle.textContent = state.forwardResultTitle;
+      elements.resultMeta.textContent = state.forwardResultMeta;
+      elements.editor.hidden = true;
+      elements.result.hidden = false;
+      elements.result.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      elements.exportButton.disabled = false;
+      elements.clearCacheButton.disabled = false;
+      elements.exportButtonLabel.textContent = `Save ${formatName}`;
+      elements.exportButtonIcon.textContent = "→";
     }
   }
 
@@ -1222,7 +1465,8 @@
       elements.extendLoopButton.disabled = false;
       elements.extendLoopButton.innerHTML = "<span>↔</span> Extend into complete loop";
       state.forwardResultTitle = `Your ${formatName} is finished.`;
-      state.forwardResultMeta = `${result.width} × ${result.height} · ${result.duration.toFixed(2)}s · ${readableBytes(result.size) || "ready to download"}${sizeCap ? ` · ${sizeCap} KB cap` : ""}`;
+      const reversed = elements.reversePlaybackOption.checked ? " · reversed" : "";
+      state.forwardResultMeta = `${result.width} × ${result.height} · ${result.duration.toFixed(2)}s${reversed} · ${readableBytes(result.size) || "ready to download"}${sizeCap ? ` · ${sizeCap} KB cap` : ""}`;
       elements.resultTitle.textContent = state.forwardResultTitle;
       elements.resultMeta.textContent = state.forwardResultMeta;
       elements.editor.hidden = true;
@@ -1253,7 +1497,13 @@
       elements.resultVideo.removeAttribute("src");
       elements.resultImage.src = sourceUrl;
     }
-    const formatName = isVideo ? "WebM" : result.mime === "image/gif" ? "GIF" : "WebP";
+    const formatName = {
+      "video/webm": "WebM",
+      "image/gif": "GIF",
+      "image/webp": "WebP",
+      "image/png": "PNG",
+      "image/jpeg": "JPEG"
+    }[result.mime] || "Image";
     elements.downloadButton.href = result.download_url;
     elements.downloadLabel.textContent = `Download ${formatName}`;
   }
@@ -1454,6 +1704,8 @@
   elements.startNumber.addEventListener("change", () => setTimes(elements.startNumber.value, elements.endRange.value, "start"));
   elements.endNumber.addEventListener("change", () => setTimes(elements.startRange.value, elements.endNumber.value, "end"));
   document.querySelectorAll('input[name="cutMode"]').forEach((input) => input.addEventListener("change", updateTimeline));
+  elements.videoSpeedSelect.addEventListener("change", () => { void changeVideoSpeed(); });
+  elements.reversePlaybackOption.addEventListener("change", updateOutputSummary);
   elements.previewSelectionButton.addEventListener("click", previewCut);
   elements.openFrameEditorButton.addEventListener("click", openFrameEditor);
   elements.closeFrameEditorButton.addEventListener("click", () => { elements.frameEditorPanel.hidden = true; });
@@ -1551,6 +1803,9 @@
   document.querySelectorAll("[data-aspect]").forEach((button) => {
     button.addEventListener("click", () => applyCropAspect(button.dataset.aspect));
   });
+  document.querySelectorAll("[data-crop-shape]").forEach((button) => {
+    button.addEventListener("click", () => setCropShape(button.dataset.cropShape));
+  });
   elements.motionCropEnabled.addEventListener("change", () => {
     setMotionCropEnabled(elements.motionCropEnabled.checked);
   });
@@ -1621,7 +1876,10 @@
   elements.colorsSelect.addEventListener("change", updateOutputSummary);
   elements.qualitySelect.addEventListener("change", updateOutputSummary);
   gifTechniqueInputs().forEach((input) => input.addEventListener("change", updateOutputSummary));
-  elements.exportButton.addEventListener("click", exportAnimation);
+  elements.exportButton.addEventListener("click", () => {
+    if (isStillImage()) void exportImage();
+    else void exportAnimation();
+  });
   elements.extendLoopButton.addEventListener("click", extendCompleteLoop);
   elements.clearCacheButton.addEventListener("click", clearLocalCache);
   elements.replaceButton.addEventListener("click", resetToImport);

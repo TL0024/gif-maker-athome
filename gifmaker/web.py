@@ -16,10 +16,12 @@ from .media import (
     ExportOptions,
     FrameExportOptions,
     FrameSequence,
+    ImageExportOptions,
     ImportProgress,
     MediaAsset,
     MediaError,
     MediaStore,
+    VideoSpeedOptions,
     import_media_url,
 )
 
@@ -211,7 +213,7 @@ def create_app(
     def upload_media() -> Response:
         upload = request.files.get("file")
         if upload is None or not upload.filename:
-            raise MediaError("Choose a video or animated image to upload.")
+            raise MediaError("Choose a video or image to upload.")
         destination = store.allocate_import_path(upload.filename)
         try:
             upload.save(destination)
@@ -235,7 +237,10 @@ def create_app(
 
         def run_import() -> None:
             try:
-                job.finish(import_media_url(link, store, job.update))
+                asset = import_media_url(link, store, job.update)
+                if asset.kind != "video":
+                    raise MediaError("The link extractor supports videos only. Upload image files from the Upload tab.")
+                job.finish(asset)
             except MediaError as exc:
                 job.fail(str(exc))
             except Exception:
@@ -266,6 +271,22 @@ def create_app(
         options = ExportOptions.from_payload(payload, source)
         exported = store.create_export(source, options)
         return jsonify({"asset": asset_json(exported)})
+
+    @app.post("/api/image-export")
+    def export_image() -> Response:
+        payload = request.get_json(silent=True) or {}
+        source = store.get(str(payload.get("media_id") or ""))
+        options = ImageExportOptions.from_payload(payload, source)
+        exported = store.create_image_export(source, options)
+        return jsonify({"asset": asset_json(exported)})
+
+    @app.post("/api/speed")
+    def change_video_speed() -> Response:
+        payload = request.get_json(silent=True) or {}
+        source = store.get(str(payload.get("media_id") or ""))
+        options = VideoSpeedOptions.from_payload(payload, source)
+        adjusted = store.create_speed_adjusted_video(source, options)
+        return jsonify({"asset": asset_json(adjusted)})
 
     @app.post("/api/frame-sequences")
     def create_frame_sequence() -> Response:
