@@ -7,10 +7,12 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
+import gifmaker.web as web_module
 from gifmaker import create_app
-from gifmaker.media import ImportProgress
+from gifmaker.media import ImportProgress, MediaInfo
 from gifmaker.web import default_data_root
 
 
@@ -45,6 +47,40 @@ def test_local_api_requires_page_token(tmp_path: Path) -> None:
     with app.test_client() as client:
         response = client.post("/api/import", json={"url": "https://example.com/video.mp4"})
     assert response.status_code == 403
+
+
+def test_nonascii_request_token_is_rejected_without_server_error(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "data", testing=True)
+    with app.test_client() as client:
+        response = client.post("/api/clear", headers={"X-GIFmakerAthome-Token": "invalid-\u00e9"})
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("body", ["[1]", '"settings"', "null", "42", "true", '{"url":'])
+@pytest.mark.parametrize("endpoint", ["/api/import", "/api/browser-session/close", "/api/select-local"])
+def test_invalid_json_settings_return_readable_errors_before_opening_picker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, endpoint: str, body: str
+) -> None:
+    def unexpected_picker() -> None:
+        pytest.fail("Invalid settings must be rejected before opening the native picker")
+
+    monkeypatch.setattr(web_module, "choose_local_media_path", unexpected_picker)
+    app = create_app(tmp_path / "data", testing=True)
+    headers = {"X-GIFmakerAthome-Token": app.extensions["gifmaker_athome_token"]}
+    with app.test_client() as client:
+        response = client.post(endpoint, data=body, content_type="application/json", headers=headers)
+    assert response.status_code == 400
+    assert "valid JSON object" in response.get_json()["error"]
+
+
+def test_missing_native_selection_returns_readable_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_module, "choose_local_media_path", lambda: tmp_path / "missing.mp4")
+    app = create_app(tmp_path / "data", testing=True)
+    headers = {"X-GIFmakerAthome-Token": app.extensions["gifmaker_athome_token"]}
+    with app.test_client() as client:
+        response = client.post("/api/select-local", json={}, headers=headers)
+    assert response.status_code == 400
+    assert "no longer available" in response.get_json()["error"]
 
 
 def test_last_browser_tab_requests_shutdown_but_refresh_keeps_server_alive(tmp_path: Path) -> None:
@@ -190,13 +226,16 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         assert b"Turn any moment" in page.data
         assert b"Paste a supported media URL" in page.data
         assert b"Only import media you own or are authorized to use" in page.data
-        assert b'accept="video/*,image/*"' in page.data
+        assert b'id="fileInput"' not in page.data
+        assert b"Nothing is copied" in page.data
         assert b'id="timelineCard"' in page.data
         assert b'id="animationFpsControl"' in page.data
         assert b'id="animationSizeControl"' in page.data
         assert b'id="reversePlaybackOption" type="checkbox"' in page.data
         assert b'id="videoSpeedControl"' in page.data
         assert b'id="videoSpeedSelect"' in page.data
+        assert b'id="sessionCutControl"' in page.data
+        assert b'id="applySessionCutButton"' in page.data
         assert b'<option value="0.5">0.5' in page.data
         assert b'<option value="8">8' in page.data
         assert b'<option value="webm" selected>' in page.data
@@ -261,6 +300,8 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         assert 'reverse: state.asset.kind === "video" && elements.reversePlaybackOption.checked' in script
         assert 'circle_crop: state.cropShape === "circle"' in script
         assert 'api("/api/speed"' in script
+        assert 'api("/api/cut"' in script
+        assert 'api("/api/select-local"' in script
         assert "configureMedia(adjustedAsset" in script
         assert 'elements.outputFormat.value = stillImage ? "webp" : "webm"' in script
         assert 'elements.resolutionSelect.value = stillImage ? "512square" : "original"' in script
@@ -290,6 +331,14 @@ def test_upload_and_media_delivery(tmp_path: Path) -> None:
         )
         assert speed_response.status_code == 400
         assert "only for video" in speed_response.get_json()["error"]
+
+        cut_response = client.post(
+            "/api/cut",
+            json={"media_id": asset["id"], "start": 0, "end": asset["duration"], "discard_middle": False},
+            headers=headers,
+        )
+        assert cut_response.status_code == 400
+        assert "only for video" in cut_response.get_json()["error"]
 
         served = client.get(asset["media_url"])
         assert served.status_code == 200
@@ -451,3 +500,95 @@ def test_bad_upload_returns_user_facing_error(tmp_path: Path) -> None:
         )
     assert response.status_code == 400
     assert "not a readable video" in response.get_json()["error"]
+
+
+def test_native_local_selection_registers_original_path_without_copying(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "outside-cache.png"
+    source.write_bytes(png_bytes())
+    monkeypatch.setattr(web_module, "choose_local_media_path", lambda: source)
+    app = create_app(tmp_path / "data", testing=True)
+    headers = {"X-GIFmakerAthome-Token": app.extensions["gifmaker_athome_token"]}
+
+    with app.test_client() as client:
+        response = client.post("/api/select-local", json={"optimize_oversized": False}, headers=headers)
+
+    assert response.status_code == 200
+    asset_id = response.get_json()["asset"]["id"]
+    store = app.extensions["gifmaker_athome_store"]
+    assert store.get(asset_id).path == source.resolve()
+    assert list(store.import_dir.iterdir()) == []
+    store.clear_all()
+    assert source.exists()
+
+
+def test_cancelling_native_local_selection_does_not_create_an_asset(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(web_module, "choose_local_media_path", lambda: None)
+    app = create_app(tmp_path / "data", testing=True)
+    headers = {"X-GIFmakerAthome-Token": app.extensions["gifmaker_athome_token"]}
+
+    with app.test_client() as client:
+        response = client.post("/api/select-local", json={}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"cancelled": True}
+
+
+def test_native_oversized_optimization_preserves_original_source(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "large-local.mp4"
+    source.write_bytes(b"local source")
+    monkeypatch.setattr(web_module, "choose_local_media_path", lambda: source)
+    monkeypatch.setattr(web_module, "STANDARD_UPLOAD_LIMIT_BYTES", 1)
+    received: dict[str, object] = {}
+
+    def fake_optimization(self, source_path, original_name, max_bytes, *, delete_source=True):
+        received.update(
+            source_path=source_path,
+            original_name=original_name,
+            max_bytes=max_bytes,
+            delete_source=delete_source,
+        )
+        return self.register(source_path, original_name)
+
+    monkeypatch.setattr("gifmaker.web.MediaStore.create_optimized_import", fake_optimization)
+    monkeypatch.setattr(
+        "gifmaker.media.probe_media",
+        lambda _path: MediaInfo(1280, 720, 10, "video", "video/mp4", "h264"),
+    )
+    app = create_app(tmp_path / "data", testing=True)
+    headers = {"X-GIFmakerAthome-Token": app.extensions["gifmaker_athome_token"]}
+
+    with app.test_client() as client:
+        response = client.post("/api/select-local", json={"optimize_oversized": True}, headers=headers)
+
+    assert response.status_code == 200
+    assert received["source_path"] == source
+    assert received["delete_source"] is False
+    assert source.exists()
+
+
+def test_oversized_upload_requires_opt_in_and_only_optimizes_video(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(web_module, "STANDARD_UPLOAD_LIMIT_BYTES", 16)
+    monkeypatch.setattr(web_module, "OPTIMIZED_UPLOAD_INPUT_LIMIT_BYTES", 1024 * 1024)
+    monkeypatch.setattr(web_module, "MULTIPART_OVERHEAD_ALLOWANCE_BYTES", 0)
+    app = create_app(tmp_path / "data", testing=True)
+    headers = {"X-GIFmakerAthome-Token": app.extensions["gifmaker_athome_token"]}
+
+    with app.test_client() as client:
+        rejected = client.post(
+            "/api/upload",
+            data={"file": (io.BytesIO(png_bytes()), "large.png")},
+            headers=headers,
+            content_type="multipart/form-data",
+        )
+        assert rejected.status_code == 413
+        assert "exceeds 16 GiB" in rejected.get_json()["error"]
+
+        optimized_headers = {**headers, "X-GIFmakerAthome-Optimize-Oversized": "1"}
+        image = client.post(
+            "/api/upload",
+            data={"file": (io.BytesIO(png_bytes()), "large.png")},
+            headers=optimized_headers,
+            content_type="multipart/form-data",
+        )
+        assert image.status_code == 400
+        assert "Only oversized videos" in image.get_json()["error"]
