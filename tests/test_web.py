@@ -13,7 +13,6 @@ from PIL import Image
 import gifmaker.web as web_module
 from gifmaker import create_app
 from gifmaker.media import ImportProgress, MediaInfo
-from gifmaker.web import default_data_root
 
 
 def animated_gif_bytes() -> bytes:
@@ -39,7 +38,7 @@ def png_bytes() -> bytes:
 def test_default_data_root_honors_environment_override(tmp_path: Path, monkeypatch) -> None:
     configured = tmp_path / "configured-cache"
     monkeypatch.setenv("GIFMAKER_ATHOME_DATA_ROOT", str(configured))
-    assert default_data_root(tmp_path / "project") == configured
+    assert web_module.default_data_root(tmp_path / "project") == configured
 
 
 def test_local_api_requires_page_token(tmp_path: Path) -> None:
