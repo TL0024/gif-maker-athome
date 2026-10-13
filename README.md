@@ -4,7 +4,7 @@
 [![CodeQL](https://github.com/TL0024/gif-maker-athome/actions/workflows/codeql.yml/badge.svg)](https://github.com/TL0024/gif-maker-athome/actions/workflows/codeql.yml)
 [![Latest release](https://img.shields.io/github/v/release/TL0024/gif-maker-athome)](https://github.com/TL0024/gif-maker-athome/releases/latest)
 
-GIFmakerAthome is a local-first Windows editor for animations and still images. It turns videos and animated images into GIF, animated WebP, or VP9 WebM files, and can crop, resize, and convert uploaded still images. The interface opens in your browser, while the application and media processing stay on `127.0.0.1` on your computer.
+GIFmakerAthome is a local-first Windows editor for animations and still images. It turns videos and animated images into GIF, animated WebP, or VP9 WebM files, and can crop, resize, and convert local still images. The interface opens in your browser, while the application and media processing stay on `127.0.0.1` on your computer.
 
 ## What's new in v1.2.0
 
@@ -39,16 +39,19 @@ After setup, local-file editing works offline. URL importing requires an interne
 
 ## Features
 
-- Upload MP4, MOV, WebM, MKV, AVI, GIF, WebP, PNG, JPEG, and BMP files.
-- Open single-frame uploads in a focused image editor with crop, resize, and PNG, JPEG, or WebP export.
-- Import video URLs, including direct video links and compatible websites, with live extraction and download progress. Image URLs remain upload-only.
-- Start animation imports with the complete original frame selected; still images default to a centered 1:1 crop. Free, original, 1:1, 16:9, and 9:16 crop controls remain available in both editors.
+- Open local MP4, MOV, WebM, MKV, AVI, GIF, WebP, PNG, JPEG, and BMP files in place.
+- Open local media directly from its existing filesystem path without copying it into the application cache.
+- Optionally compress and downscale local videos over 16 GiB into a 1080p H.264 working copy while leaving the original file untouched.
+- Open single-frame local files in a focused image editor with crop, resize, and PNG, JPEG, or WebP export.
+- Import video URLs, including direct video links and compatible websites, with live extraction and download progress. Images remain local-file only.
+- Start animations with the complete original frame selected; still images default to a centered 1:1 crop. Free, original, 1:1, 16:9, and 9:16 crop controls remain available in both editors.
 - Drag or resize the crop frame directly over the media preview.
 - Choose a square crop (the default) or a circular crop. Circle mode keeps the crop and output at a 1:1 aspect ratio and preserves transparent corners in supported formats.
 - Enable **Motion crop** to smoothly pan and zoom through 2–10 independently positioned, sized, and timed crop keyframes.
 - Keep a selected time range or remove a selected section from the middle.
 - Reverse a video selection after its cut and crop have been applied.
 - Change a video's working speed from 0.5× through 8× and immediately edit against the rebuilt preview and duration.
+- Apply the selected time cut as a shorter session video, avoiding repeated reads through the full source during later exports.
 - Export adaptive-palette GIF, animated WebP, or silent VP9 WebM.
 - Keep the cropped pixels at their original resolution or use 512 × 512, percentage, and custom-size presets.
 - Choose frame rates from 1 through 30 FPS and adjust format-specific quality.
@@ -57,15 +60,15 @@ After setup, local-file editing works offline. URL importing requires an interne
 - Extend a GIF or WebM into a forward-and-reverse loop without repeating the turnaround frame.
 - Build a browser-compatible preview locally when the browser cannot play the imported format directly.
 - Remove audio, subtitles, data streams, chapters, and inherited metadata from every export.
-- Clear imported files, previews, extracted frames, and generated files automatically at startup or manually with **Clear cache**.
+- Clear downloaded imports, working videos, previews, extracted frames, and generated files automatically at startup or manually with **Clear cache**. Local originals are never deleted.
 
 ## Editing workflow
 
-1. Upload a file or select **Paste a link** and import a supported video. The link extractor accepts videos only; images must be uploaded from the local computer.
+1. Select **Open a video or image from this computer** and choose a local file. The native Windows picker gives the app its existing path, so the original is opened in place instead of being copied into the cache. Enable **Optimize local videos over 16 GiB** first if you want a silent H.264 working copy no larger than 1920 × 1080; the original remains untouched. The link extractor accepts videos only and downloads them into the temporary import cache; online images are not supported.
    URL imports show their extraction stage first, then downloaded bytes, percentage, transfer speed, and estimated time when the source provides that information.
-   Single-frame image uploads open the image editor with WebP quality 85, a centered 1:1 crop, and 512 × 512 output selected by default. Change the crop, dimensions, format, or quality if needed, then save a PNG, JPEG, or WebP locally. PNG export is lossless; JPEG places transparent pixels on white; WebP preserves transparency. Every image export removes inherited metadata. The animation steps below apply to videos and animated GIF/WebP files.
+   Single-frame local images open the image editor with WebP quality 85, a centered 1:1 crop, and 512 × 512 output selected by default. Change the crop, dimensions, format, or quality if needed, then save a PNG, JPEG, or WebP locally. PNG export is lossless; JPEG places transparent pixels on white; WebP preserves transparency. Every image export removes inherited metadata. The animation steps below apply to videos and animated GIF/WebP files.
 2. The crop initially uses the default **Square** shape and covers the complete source. Choose **Circle** for a masked 1:1 crop with transparent corners, or drag the crop frame and use an aspect preset for a smaller square/rectangular region. For a moving crop, enable **Motion crop**, set position 1, then use **+ Position** to build a path of up to 10 positions. Every added position inherits the latest position's crop and time so you can extend the motion from where it left off; **− Position** removes the currently selected position while keeping at least one. Motion mode replaces the two range thumbs with numbered timing markers. Select a position tab, then drag its highlighted marker to update that position's **At** time; the other markers remain grey and fixed. At least two positions are required, and the exported animation includes only the time from the first marker through the last marker.
-3. Set the video speed if needed, then choose the start and end controls against the updated preview timing. **Keep selected range** exports that interval; **Remove selected middle** joins the sections before and after it. For video sources, enable **Reverse playback** to play the complete rendered selection from end to start. Reversal happens after cutting and crop processing, and the frame editor extracts frames in that same reversed order.
+3. Set the video speed if needed, then choose the start and end controls against the updated preview timing. **Keep selected range** exports that interval; **Remove selected middle** joins the sections before and after it. Select **Apply session cut** to create and reload a shorter working MP4 once; later exports then read only that cut video. This temporary session action keeps the current crop and export settings and resets the new video's timeline to its full duration. For video sources, enable **Reverse playback** to play the complete rendered selection from end to start. Reversal happens after cutting and crop processing, and the frame editor extracts frames in that same reversed order.
 4. Choose GIF, animated WebP, or WebM. WebM, 30 FPS, quality 40, original crop size, and no file-size cap are the defaults.
 5. Adjust resolution, FPS, quality, GIF palette, and the optional size cap.
 6. Select **Create GIF**, **Create WebP**, or **Create WebM**, then preview and download the result.
@@ -106,8 +109,8 @@ For Telegram video stickers, select WebM, keep the animation at 30 FPS or lower 
 - Each loaded app page has a per-run browser-session identifier. Closing the last app tab requests server shutdown; a short grace period prevents an ordinary refresh from stopping the process.
 - The source version stores temporary session data in `.gifmaker-athome-data/`.
 - The executable stores temporary session data in `%LOCALAPPDATA%\GIFmakerAthome\cache`.
-- Startup recreates the temporary imports, exports, previews, and frame folders. Download anything you want to keep before restarting.
-- Link imports accept video results only and reject loopback and private-network addresses. Uploaded images never use the network.
+- Startup recreates the temporary imports, working-video, exports, previews, and frame folders. Local originals opened in place are outside this cache and are never removed. Download any generated outputs you want to keep before restarting.
+- Link imports accept video results only and reject loopback and private-network addresses. Local images never use the network.
 - There are no accounts, analytics, cloud conversion services, or third-party interface assets.
 
 ## Responsible use

@@ -11,7 +11,8 @@
     loadingTitle: $("loadingTitle"), loadingDetail: $("loadingDetail"),
     loadingProgress: $("loadingProgress"), loadingProgressBar: $("loadingProgressBar"),
     loadingProgressText: $("loadingProgressText"), editor: $("editor"),
-    result: $("resultPanel"), fileInput: $("fileInput"), dropZone: $("dropZone"),
+    result: $("resultPanel"), dropZone: $("dropZone"),
+    optimizeOversizedUpload: $("optimizeOversizedUpload"),
     linkInput: $("linkInput"), importLinkButton: $("importLinkButton"), mediaName: $("mediaName"),
     mediaMeta: $("mediaMeta"), editorKicker: $("editorKicker"), stage: $("mediaStage"), video: $("videoPreview"),
     image: $("imagePreview"), previewError: $("previewError"), cropBox: $("cropBox"),
@@ -26,6 +27,7 @@
     selectedDuration: $("selectedDuration"), totalDurationLabel: $("totalDurationLabel"),
     modeHint: $("modeHint"), previewSelectionButton: $("previewSelectionButton"), timelineCard: $("timelineCard"),
     videoSpeedControl: $("videoSpeedControl"), videoSpeedSelect: $("videoSpeedSelect"),
+    sessionCutControl: $("sessionCutControl"), applySessionCutButton: $("applySessionCutButton"),
     reversePlaybackControl: $("reversePlaybackControl"), reversePlaybackOption: $("reversePlaybackOption"),
     openFrameEditorButton: $("openFrameEditorButton"), frameEditorPanel: $("frameEditorPanel"),
     closeFrameEditorButton: $("closeFrameEditorButton"), frameEditorSummary: $("frameEditorSummary"),
@@ -85,7 +87,8 @@
     frameSignature: "",
     draggedFrameId: null,
     frameInstanceSerial: 0,
-    frameEditorBusy: false
+    frameEditorBusy: false,
+    sessionCutBusy: false
   };
 
   async function api(path, options = {}) {
@@ -234,6 +237,15 @@
     return duration * Math.max(0, last - first);
   }
 
+  function updateSessionCutButton() {
+    const video = state.asset?.kind === "video";
+    elements.sessionCutControl.hidden = !video;
+    if (!video) return;
+    const { start, end } = selectedTimes();
+    const wholeVideo = start <= 0.001 && end >= state.asset.duration - 0.001;
+    elements.applySessionCutButton.disabled = state.sessionCutBusy || (!isDiscardMode() && wholeVideo);
+  }
+
   function updateTimeline() {
     if (!state.asset) return;
     const duration = state.asset.duration;
@@ -252,6 +264,7 @@
     if (state.motionCropEnabled) {
       updateMotionCropControls();
     }
+    updateSessionCutButton();
     updateOutputSummary();
   }
 
@@ -852,6 +865,7 @@
 
   function configureMedia(asset, speedContext = null) {
     const preserveEdits = Boolean(speedContext?.preserveEdits && state.asset?.kind === "video");
+    const resetSelection = Boolean(speedContext?.resetSelection);
     const previousSpeed = state.videoSpeed || 1;
     const previousTimes = preserveEdits ? selectedTimes() : null;
     resetFrameEditor();
@@ -880,6 +894,7 @@
     elements.videoSpeedSelect.value = String(state.videoSpeed);
     elements.videoSpeedSelect.disabled = false;
     elements.reversePlaybackControl.hidden = asset.kind !== "video";
+    elements.sessionCutControl.hidden = asset.kind !== "video";
     if (!preserveEdits) elements.reversePlaybackOption.checked = false;
     elements.previewError.hidden = true;
     elements.mediaName.textContent = asset.name;
@@ -920,7 +935,7 @@
     ]) {
       input.max = duration.toFixed(3);
     }
-    if (preserveEdits && previousTimes) {
+    if (preserveEdits && previousTimes && !resetSelection) {
       const timingScale = previousSpeed / state.videoSpeed;
       const selectedWholeSource = previousTimes.start <= 0.001 &&
         previousTimes.end >= Number(speedContext.previousDuration) - 0.001;
@@ -949,6 +964,7 @@
     } else {
       paintCrop(state.crop);
       syncResolutionFromCrop();
+      if (resetSelection) document.querySelector('input[name="cutMode"][value="keep"]').checked = true;
     }
     if (!stillImage) {
       if (preserveEdits) setTimes(elements.startRange.value, elements.endRange.value);
@@ -978,6 +994,7 @@
     const previousDuration = state.asset.duration;
     elements.video.pause();
     elements.videoSpeedSelect.disabled = true;
+    elements.applySessionCutButton.disabled = true;
     setLoading(
       true,
       `Changing video speed to ${requestedSpeed}×…`,
@@ -1005,22 +1022,75 @@
       showToast(error.message);
     } finally {
       elements.videoSpeedSelect.disabled = false;
+      updateSessionCutButton();
     }
   }
 
-  async function uploadFile(file) {
-    if (!file) return;
-    setLoading(true, "Reading your media…", "The file stays on this computer.");
-    const body = new FormData();
-    body.append("file", file);
+  async function applySessionCut() {
+    if (!state.asset || state.asset.kind !== "video" || state.sessionCutBusy) return;
+    const { start, end } = selectedTimes();
+    const discardMiddle = isDiscardMode();
+    if (!discardMiddle && start <= 0.001 && end >= state.asset.duration - 0.001) {
+      showToast("Choose a shorter range before applying a session cut.");
+      return;
+    }
+
+    const previousDuration = state.asset.duration;
+    if (state.previewing) stopPreviewCut();
+    state.sessionCutBusy = true;
+    updateSessionCutButton();
+    elements.videoSpeedSelect.disabled = true;
+    setLoading(
+      true,
+      "Creating the session cut…",
+      "This one-time cut makes later animation exports read only the frames you kept."
+    );
     try {
-      const data = await api("/api/upload", { method: "POST", body });
+      const data = await api("/api/cut", {
+        method: "POST",
+        body: JSON.stringify({
+          media_id: state.asset.id,
+          start,
+          end,
+          discard_middle: discardMiddle
+        })
+      });
+      configureMedia(data.asset, {
+        preserveEdits: true,
+        sourceAsset: data.asset,
+        speed: 1,
+        previousDuration,
+        resetSelection: true
+      });
+      showToast("The session now uses the cut working video.", "success");
+    } catch (error) {
+      elements.loading.hidden = true;
+      elements.clearCacheButton.disabled = false;
+      elements.editor.hidden = false;
+      showToast(error.message);
+    } finally {
+      state.sessionCutBusy = false;
+      elements.videoSpeedSelect.disabled = false;
+      updateSessionCutButton();
+    }
+  }
+
+  async function selectLocalFile() {
+    setLoading(true, "Choose a local file…", "The file will be opened from its current location without a copy.");
+    try {
+      const data = await api("/api/select-local", {
+        method: "POST",
+        body: JSON.stringify({ optimize_oversized: elements.optimizeOversizedUpload.checked })
+      });
+      if (data.cancelled) {
+        restoreImporter();
+        return;
+      }
       configureMedia(data.asset);
+      if (data.optimized) showToast("The oversized video was compressed to a 1080p working copy.", "success");
     } catch (error) {
       restoreImporter();
       showToast(error.message);
-    } finally {
-      elements.fileInput.value = "";
     }
   }
 
@@ -1167,6 +1237,7 @@
     state.asset = null;
     state.speedSourceAsset = null;
     state.videoSpeed = 1;
+    state.sessionCutBusy = false;
     state.resultAsset = null;
     state.forwardAsset = null;
     state.extendedAsset = null;
@@ -1671,15 +1742,7 @@
     });
   });
 
-  elements.dropZone.addEventListener("click", () => elements.fileInput.click());
-  elements.fileInput.addEventListener("change", () => uploadFile(elements.fileInput.files[0]));
-  for (const eventName of ["dragenter", "dragover"]) {
-    elements.dropZone.addEventListener(eventName, (event) => { event.preventDefault(); elements.dropZone.classList.add("dragging"); });
-  }
-  for (const eventName of ["dragleave", "drop"]) {
-    elements.dropZone.addEventListener(eventName, (event) => { event.preventDefault(); elements.dropZone.classList.remove("dragging"); });
-  }
-  elements.dropZone.addEventListener("drop", (event) => uploadFile(event.dataTransfer.files[0]));
+  elements.dropZone.addEventListener("click", () => { void selectLocalFile(); });
   elements.importLinkButton.addEventListener("click", importLink);
   elements.linkInput.addEventListener("keydown", (event) => { if (event.key === "Enter") importLink(); });
 
@@ -1705,6 +1768,7 @@
   elements.endNumber.addEventListener("change", () => setTimes(elements.startRange.value, elements.endNumber.value, "end"));
   document.querySelectorAll('input[name="cutMode"]').forEach((input) => input.addEventListener("change", updateTimeline));
   elements.videoSpeedSelect.addEventListener("change", () => { void changeVideoSpeed(); });
+  elements.applySessionCutButton.addEventListener("click", () => { void applySessionCut(); });
   elements.reversePlaybackOption.addEventListener("change", updateOutputSummary);
   elements.previewSelectionButton.addEventListener("click", previewCut);
   elements.openFrameEditorButton.addEventListener("click", openFrameEditor);

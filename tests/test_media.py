@@ -12,16 +12,21 @@ from gifmaker.media import (
     ExportOptions,
     FrameExportOptions,
     ImportProgress,
+    MediaAsset,
     MediaError,
+    MediaInfo,
     MediaStore,
     MotionCropKeyframe,
+    VideoCutOptions,
     VideoSpeedOptions,
     _collapse_consecutive_frames,
     _download_direct,
     _run_ffmpeg,
     build_filter_graph,
     build_frame_extraction_graph,
+    cut_video_for_session,
     ffmpeg_executable,
+    optimize_oversized_video,
     validate_public_url,
 )
 
@@ -30,6 +35,103 @@ def test_ffmpeg_runner_rejects_a_different_executable(monkeypatch: pytest.Monkey
     monkeypatch.setattr("gifmaker.media.ffmpeg_executable", lambda: "trusted-ffmpeg.exe")
     with pytest.raises(MediaError, match="trusted FFmpeg"):
         _run_ffmpeg(["different-program.exe", "-version"], 1)
+
+
+@pytest.mark.parametrize("field", ["start", "end"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_export_rejects_nonfinite_timestamps(tmp_path: Path, field: str, value: float) -> None:
+    source = MediaAsset("source", tmp_path / "source.mp4", "source.mp4", 100, 100, 10, "video", "video/mp4")
+    with pytest.raises(MediaError, match="inside the media duration"):
+        ExportOptions.from_payload({field: value}, source)
+
+
+@pytest.mark.parametrize("field", ["crop_width", "fps", "max_size_kb"])
+def test_export_rejects_infinite_integer_settings(tmp_path: Path, field: str) -> None:
+    source = MediaAsset("source", tmp_path / "source.mp4", "source.mp4", 100, 100, 10, "video", "video/mp4")
+    with pytest.raises(MediaError, match="settings are invalid"):
+        ExportOptions.from_payload({field: float("inf")}, source)
+
+
+def test_session_cut_reports_empty_ffmpeg_diagnostics_and_removes_partial_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = MediaAsset("source", tmp_path / "source.mp4", "source.mp4", 100, 100, 10, "video", "video/mp4")
+    output = tmp_path / "partial.mp4"
+
+    def fail_encoding(command: list[str], _timeout: int) -> subprocess.CompletedProcess[str]:
+        output.write_bytes(b"partial video")
+        return subprocess.CompletedProcess(command, 1, "", " \n\t")
+
+    monkeypatch.setattr("gifmaker.media._run_ffmpeg", fail_encoding)
+    with pytest.raises(MediaError, match="Unknown FFmpeg error"):
+        cut_video_for_session(source, output, VideoCutOptions(1, 2))
+    assert not output.exists()
+
+
+def test_oversized_video_optimization_downscales_and_targets_bounded_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "large.mov"
+    output = tmp_path / "optimized.mp4"
+    source.write_bytes(b"source")
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+        captured.update(command=command, timeout=timeout)
+        output.write_bytes(b"optimized")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("gifmaker.media.ffmpeg_executable", lambda: "trusted-ffmpeg.exe")
+    monkeypatch.setattr("gifmaker.media._run_ffmpeg", fake_run)
+    info = MediaInfo(3840, 2160, 3600, "video", "video/quicktime", "hevc")
+
+    optimize_oversized_video(source, output, info, max_bytes=16 * 1024**3)
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "force_original_aspect_ratio=decrease:force_divisible_by=2" in command[command.index("-vf") + 1]
+    assert command[command.index("-b:v") + 1] == "8000000"
+    assert "-an" in command
+    assert output.read_bytes() == b"optimized"
+
+
+def test_oversized_optimization_accepts_video_only(tmp_path: Path) -> None:
+    with pytest.raises(MediaError, match="Only oversized videos"):
+        optimize_oversized_video(
+            tmp_path / "large.png",
+            tmp_path / "optimized.mp4",
+            MediaInfo(100, 100, 0, "still_image", "image/png"),
+            max_bytes=16 * 1024**3,
+        )
+
+
+def test_session_cut_seeks_before_input_and_joins_retained_ranges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "source.mp4"
+    source_path.write_bytes(b"source")
+    source = MediaAsset("source", source_path, "source.mp4", 1920, 1080, 60, "video", "video/mp4", "h264")
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], _timeout: int) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"cut")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("gifmaker.media.ffmpeg_executable", lambda: "trusted-ffmpeg.exe")
+    monkeypatch.setattr("gifmaker.media._run_ffmpeg", fake_run)
+
+    cut_video_for_session(source, tmp_path / "kept.mp4", VideoCutOptions(50, 55))
+    keep_command = commands[-1]
+    assert keep_command[keep_command.index("-ss") + 1] == "50"
+    assert keep_command.index("-ss") < keep_command.index("-i")
+    assert keep_command[keep_command.index("-t") + 1] == "5"
+
+    cut_video_for_session(source, tmp_path / "joined.mp4", VideoCutOptions(10, 50, discard_middle=True))
+    discard_command = commands[-1]
+    assert discard_command.count("-i") == 2
+    assert "[before][after]concat=n=2:v=1:a=0[out]" in discard_command[discard_command.index("-filter_complex") + 1]
+    assert VideoCutOptions(10, 50, discard_middle=True).output_duration(60) == 20
 
 
 def test_direct_download_reports_byte_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -259,7 +361,8 @@ def test_media_store_clears_all_cache_files_on_startup_and_on_demand(tmp_path: P
     assert not stale.exists()
     assert store.startup_cleanup == {"files": 1, "bytes": 9}
     assert all(
-        directory.is_dir() for directory in (store.import_dir, store.export_dir, store.preview_dir, store.frame_dir)
+        directory.is_dir()
+        for directory in (store.import_dir, store.working_dir, store.export_dir, store.preview_dir, store.frame_dir)
     )
 
     generated = store.export_dir / "temporary.bin"
@@ -267,6 +370,7 @@ def test_media_store_clears_all_cache_files_on_startup_and_on_demand(tmp_path: P
     cleared = store.clear_all()
     assert cleared == {"files": 1, "bytes": 5}
     assert list(store.import_dir.iterdir()) == []
+    assert list(store.working_dir.iterdir()) == []
     assert list(store.export_dir.iterdir()) == []
     assert list(store.preview_dir.iterdir()) == []
     assert list(store.frame_dir.iterdir()) == []
@@ -547,6 +651,15 @@ def test_real_ffmpeg_exports_gif_webp_and_webm_with_crop_resize_and_middle_remov
     assert faster_source.codec == "h264"
     assert faster_source.duration == pytest.approx(source.duration / 2, abs=0.2)
     assert not faster_source.browser_preview_required
+
+    kept_cut = store.create_session_cut(source, VideoCutOptions(start=0.5, end=1.5))
+    assert kept_cut.name == "My Holiday Clip-session-cut.mp4"
+    assert kept_cut.duration == pytest.approx(1, abs=0.2)
+    assert not kept_cut.browser_preview_required
+
+    joined_cut = store.create_session_cut(source, VideoCutOptions(start=0.8, end=2.2, discard_middle=True))
+    assert joined_cut.duration == pytest.approx(1.6, abs=0.25)
+    assert not joined_cut.browser_preview_required
 
     hevc_source = replace(source, codec="hevc")
     assert hevc_source.browser_preview_required
