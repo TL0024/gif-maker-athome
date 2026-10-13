@@ -4,6 +4,21 @@ All notable changes to GIFmakerAthome are documented here. Releases follow seman
 
 ## [Unreleased]
 
+### Added
+
+- Native local-file selection that opens media from its existing path without copying it into the import cache.
+- Optional session cuts that create a smaller H.264 working video from the selected timeline ranges, so repeated exports no longer scan the full source.
+- Opt-in compression and 1080p downscaling for local videos over 16 GiB while preserving the original file.
+
+### Changed
+
+- Raised the legacy multipart-upload limit from 4 GiB to 16 GiB; native local selection does not send file bytes through that route.
+
+### Fixed
+
+- Restored strict type checking with the current yt-dlp stubs without depending on private type names.
+- Return readable errors for malformed request settings, non-finite export values, missing local files, and FFmpeg failures with empty diagnostics.
+
 ## [1.2.0] - 2026-08-24
 
 ### Added

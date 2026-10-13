@@ -19,15 +19,12 @@ from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from itertools import pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import requests
 from bs4 import BeautifulSoup
 from PIL import Image, ImageChops, ImageDraw, ImageOps
 from werkzeug.utils import secure_filename
-
-if TYPE_CHECKING:
-    from yt_dlp import _Params
 
 
 class MediaError(RuntimeError):
@@ -127,7 +124,7 @@ class VideoSpeedOptions:
     def from_payload(cls, payload: dict[str, Any], media: MediaAsset) -> VideoSpeedOptions:
         try:
             speed = float(payload.get("speed", 1))
-        except (TypeError, ValueError) as exc:
+        except (OverflowError, TypeError, ValueError) as exc:
             raise MediaError("Choose a video speed between 0.5x and 8x.") from exc
         options = cls(speed=speed)
         options.validate(media)
@@ -138,6 +135,49 @@ class VideoSpeedOptions:
             raise MediaError("Speed adjustment is available only for video sources.")
         if not math.isfinite(self.speed) or not 0.5 <= self.speed <= 8:
             raise MediaError("Choose a video speed between 0.5x and 8x.")
+
+
+@dataclass(frozen=True)
+class VideoCutOptions:
+    start: float
+    end: float
+    discard_middle: bool = False
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any], media: MediaAsset) -> VideoCutOptions:
+        try:
+            options = cls(
+                start=float(payload.get("start", 0)),
+                end=float(payload.get("end", media.duration)),
+                discard_middle=bool(payload.get("discard_middle", False)),
+            )
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise MediaError("The session cut settings are invalid.") from exc
+        options.validate(media)
+        return options
+
+    def validate(self, media: MediaAsset) -> None:
+        tolerance = 0.05
+        if media.kind != "video":
+            raise MediaError("Session cuts are available only for video sources.")
+        if (
+            not math.isfinite(self.start)
+            or not math.isfinite(self.end)
+            or self.start < 0
+            or self.end > media.duration + tolerance
+            or self.end <= self.start
+        ):
+            raise MediaError("Choose a valid video interval before applying the session cut.")
+        if self.discard_middle and self.start <= tolerance and self.end >= media.duration - tolerance:
+            raise MediaError("Removing that interval would leave no video.")
+        if not self.discard_middle and self.start <= tolerance and self.end >= media.duration - tolerance:
+            raise MediaError("Choose a shorter range before applying the session cut.")
+
+    def output_duration(self, source_duration: float) -> float:
+        resolved_end = min(self.end, source_duration)
+        if self.discard_middle:
+            return self.start + max(0, source_duration - resolved_end)
+        return max(0, resolved_end - self.start)
 
 
 @dataclass(frozen=True)
@@ -166,7 +206,7 @@ class ImageExportOptions:
                 quality=int(payload.get("quality", 85)),
                 circle_crop=bool(payload.get("circle_crop", False)),
             )
-        except (TypeError, ValueError) as exc:
+        except (OverflowError, TypeError, ValueError) as exc:
             raise MediaError("One or more image-export settings are invalid.") from exc
         options.validate(media)
         return options
@@ -271,14 +311,20 @@ class ExportOptions:
                 optimize_unchanged_pixels=bool(payload.get("optimize_unchanged_pixels", False)),
                 remove_duplicate_frames=bool(payload.get("remove_duplicate_frames", False)),
             )
-        except (KeyError, TypeError, ValueError) as exc:
+        except (KeyError, OverflowError, TypeError, ValueError) as exc:
             raise MediaError("One or more export settings are invalid.") from exc
         options.validate(media)
         return options
 
     def validate(self, media: MediaAsset) -> None:
         tolerance = 0.05
-        if self.start < 0 or self.end > media.duration + tolerance or self.end <= self.start:
+        if (
+            not math.isfinite(self.start)
+            or not math.isfinite(self.end)
+            or self.start < 0
+            or self.end > media.duration + tolerance
+            or self.end <= self.start
+        ):
             raise MediaError("Choose an end time that is after the start time and inside the media duration.")
         if self.discard_middle and self.start <= tolerance and self.end >= media.duration - tolerance:
             raise MediaError("Removing that interval would leave no frames. Shorten the removed interval.")
@@ -382,7 +428,7 @@ class FrameExportOptions:
                 optimize_unchanged_pixels=bool(payload.get("optimize_unchanged_pixels", False)),
                 remove_duplicate_frames=bool(payload.get("remove_duplicate_frames", False)),
             )
-        except (TypeError, ValueError) as exc:
+        except (OverflowError, TypeError, ValueError) as exc:
             raise MediaError("One or more frame-export settings are invalid.") from exc
         options.validate()
         return options
@@ -481,6 +527,11 @@ def probe_media(path: Path) -> MediaInfo:
 
 def _num(value: float) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _ffmpeg_error_detail(stderr: str | None) -> str:
+    lines = (stderr or "").strip().splitlines()
+    return lines[-1][:500] if lines else "Unknown FFmpeg error"
 
 
 def _selected_output_duration(options: ExportOptions, duration: float) -> float:
@@ -697,7 +748,7 @@ def _encode_animation_once(source: MediaAsset, output_path: Path, options: Expor
     except subprocess.TimeoutExpired as exc:
         raise MediaError("Animation creation timed out. Try a shorter duration or smaller resolution.") from exc
     if result.returncode != 0 or not output_path.exists():
-        detail = (result.stderr or "Unknown FFmpeg error").strip().splitlines()[-1]
+        detail = _ffmpeg_error_detail(result.stderr)
         raise MediaError(f"{options.output_format.upper()} creation failed: {detail[:500]}")
     if options.output_format == "gif" and options.remove_duplicate_frames:
         _remove_duplicate_gif_frames(output_path)
@@ -888,8 +939,164 @@ def adjust_video_speed(
         raise MediaError("Changing the video speed timed out. Try a shorter video.") from exc
     if result.returncode != 0 or not output_path.exists():
         output_path.unlink(missing_ok=True)
-        detail = (result.stderr or "Unknown FFmpeg error").strip().splitlines()[-1]
+        detail = _ffmpeg_error_detail(result.stderr)
         raise MediaError(f"The video speed could not be changed: {detail[:500]}")
+
+
+def cut_video_for_session(source: MediaAsset, output_path: Path, options: VideoCutOptions) -> None:
+    """Create a frame-precise, browser-native working video from the selected time ranges."""
+    options.validate(source)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [ffmpeg_executable(), "-hide_banner", "-loglevel", "error"]
+    resolved_end = min(options.end, source.duration)
+    internal_middle_cut = options.discard_middle and options.start > 0.001 and resolved_end < source.duration - 0.001
+    if internal_middle_cut:
+        command.extend(["-t", _num(options.start), "-i", str(source.path)])
+        command.extend(
+            [
+                "-ss",
+                _num(resolved_end),
+                "-t",
+                _num(source.duration - resolved_end),
+                "-i",
+                str(source.path),
+                "-filter_complex",
+                (
+                    "[0:v]setpts=PTS-STARTPTS,pad=ceil(iw/2)*2:ceil(ih/2)*2[before];"
+                    "[1:v]setpts=PTS-STARTPTS,pad=ceil(iw/2)*2:ceil(ih/2)*2[after];"
+                    "[before][after]concat=n=2:v=1:a=0[out]"
+                ),
+                "-map",
+                "[out]",
+            ]
+        )
+    else:
+        if options.discard_middle and options.start <= 0.001:
+            segment_start = resolved_end
+            segment_duration = source.duration - resolved_end
+        elif options.discard_middle:
+            segment_start = 0.0
+            segment_duration = options.start
+        else:
+            segment_start = options.start
+            segment_duration = resolved_end - options.start
+        if segment_start > 0.001:
+            command.extend(["-ss", _num(segment_start)])
+        command.extend(
+            [
+                "-t",
+                _num(segment_duration),
+                "-i",
+                str(source.path),
+                "-map",
+                "0:v:0",
+                "-vf",
+                "setpts=PTS-STARTPTS,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            ]
+        )
+    command.extend(
+        [
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+            "-an",
+            "-sn",
+            "-dn",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-fps_mode",
+            "vfr",
+            "-movflags",
+            "+faststart",
+            "-y",
+            str(output_path),
+        ]
+    )
+    timeout = max(900, min(43_200, math.ceil(options.output_duration(source.duration) * 4)))
+    try:
+        result = _run_ffmpeg(command, timeout)
+    except subprocess.TimeoutExpired as exc:
+        output_path.unlink(missing_ok=True)
+        raise MediaError("Creating the session cut timed out. Choose a shorter interval.") from exc
+    if result.returncode != 0 or not output_path.exists():
+        output_path.unlink(missing_ok=True)
+        detail = _ffmpeg_error_detail(result.stderr)
+        raise MediaError(f"The session cut could not be created: {detail[:500]}")
+
+
+def optimize_oversized_video(
+    source_path: Path,
+    output_path: Path,
+    info: MediaInfo,
+    max_bytes: int,
+) -> None:
+    """Create a browser-native, downscaled working copy below the upload threshold."""
+    if info.kind != "video":
+        raise MediaError("Only oversized videos can be optimized automatically.")
+    if info.duration <= 0:
+        raise MediaError("The oversized video's duration could not be determined.")
+
+    # Leave ample room for rate-control variance and MP4 container overhead. The
+    # 8 Mbps ceiling is a practical upper bound for the 1080p working copy.
+    target_bitrate = max(100_000, min(8_000_000, int(max_bytes * 8 * 0.85 / info.duration)))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg_executable(),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source_path),
+        "-map",
+        "0:v:0",
+        "-vf",
+        ("scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1"),
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+        "-an",
+        "-sn",
+        "-dn",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-b:v",
+        str(target_bitrate),
+        "-maxrate",
+        str(target_bitrate),
+        "-bufsize",
+        str(target_bitrate * 2),
+        "-pix_fmt",
+        "yuv420p",
+        "-fps_mode",
+        "vfr",
+        "-movflags",
+        "+faststart",
+        "-y",
+        str(output_path),
+    ]
+    timeout = max(1800, min(43_200, math.ceil(info.duration * 4)))
+    try:
+        result = _run_ffmpeg(command, timeout)
+    except subprocess.TimeoutExpired as exc:
+        output_path.unlink(missing_ok=True)
+        raise MediaError("Optimizing the oversized video timed out.") from exc
+    if result.returncode != 0 or not output_path.exists():
+        output_path.unlink(missing_ok=True)
+        detail = _ffmpeg_error_detail(result.stderr)
+        raise MediaError(f"The oversized video could not be optimized: {detail[:500]}")
+    if output_path.stat().st_size > max_bytes:
+        output_path.unlink(missing_ok=True)
+        raise MediaError("The optimized video is still larger than 16 GiB. Use a shorter source video.")
 
 
 MAX_FRAME_EDITOR_FRAMES = 900
@@ -969,7 +1176,7 @@ def extract_frame_sequence(
     frames = tuple(sorted(output_directory.glob("frame-*.png")))
     if result.returncode != 0 or not frames:
         shutil.rmtree(output_directory, ignore_errors=True)
-        detail = (result.stderr or "Unknown FFmpeg error").strip().splitlines()[-1]
+        detail = _ffmpeg_error_detail(result.stderr)
         raise MediaError(f"Frames could not be extracted: {detail[:500]}")
     if len(frames) > MAX_FRAME_EDITOR_FRAMES:
         shutil.rmtree(output_directory, ignore_errors=True)
@@ -1114,7 +1321,7 @@ def _encode_ordered_frames_once(
         raise MediaError("Frame compilation timed out. Try fewer frames or a smaller resolution.") from exc
     if result.returncode != 0 or not output_path.exists():
         output_path.unlink(missing_ok=True)
-        detail = (result.stderr or "Unknown FFmpeg error").strip().splitlines()[-1]
+        detail = _ffmpeg_error_detail(result.stderr)
         raise MediaError(f"Frame compilation failed: {detail[:500]}")
     if options.output_format == "gif" and options.remove_duplicate_frames:
         _remove_duplicate_gif_frames(output_path)
@@ -1252,7 +1459,7 @@ def export_pingpong_loop(source: MediaAsset, output_path: Path, output_format: s
         raise MediaError("Loop extension timed out. Try a shorter animation.") from exc
     if result.returncode != 0 or not output_path.exists():
         output_path.unlink(missing_ok=True)
-        detail = (result.stderr or "Unknown FFmpeg error").strip().splitlines()[-1]
+        detail = _ffmpeg_error_detail(result.stderr)
         raise MediaError(f"Loop extension failed: {detail[:500]}")
 
 
@@ -1262,6 +1469,7 @@ class MediaStore:
         if self.root.parent == self.root:
             raise MediaError("The cache directory cannot be a filesystem root.")
         self.import_dir = self.root / "imports"
+        self.working_dir = self.root / "working"
         self.export_dir = self.root / "exports"
         self.preview_dir = self.root / "previews"
         self.frame_dir = self.root / "frames"
@@ -1299,7 +1507,13 @@ class MediaStore:
             self._assets.clear()
             self._previews.clear()
             self._frame_sequences.clear()
-            for cache_directory in (self.import_dir, self.export_dir, self.preview_dir, self.frame_dir):
+            for cache_directory in (
+                self.import_dir,
+                self.working_dir,
+                self.export_dir,
+                self.preview_dir,
+                self.frame_dir,
+            ):
                 cache_directory.mkdir(parents=True, exist_ok=True)
         return {"files": removed_files, "bytes": removed_bytes}
 
@@ -1344,6 +1558,31 @@ class MediaStore:
             self._assets[asset.id] = asset
         return asset
 
+    def create_optimized_import(
+        self,
+        source_path: Path,
+        original_name: str,
+        max_bytes: int,
+        *,
+        delete_source: bool = True,
+    ) -> MediaAsset:
+        """Create a smaller 1080p H.264 working copy and optionally remove a cached source."""
+        with self._lock:
+            info = probe_media(source_path)
+            if info.kind != "video":
+                raise MediaError("Only oversized videos can be optimized automatically.")
+            output = self.working_dir / f"{uuid.uuid4().hex}-optimized.mp4"
+            try:
+                optimize_oversized_video(source_path, output, info, max_bytes)
+                source_stem = Path(original_name).stem.strip() or "video"
+                asset = self.register(output, f"{source_stem}-optimized.mp4")
+            except Exception:
+                output.unlink(missing_ok=True)
+                raise
+            if delete_source:
+                source_path.unlink(missing_ok=True)
+            return asset
+
     def get(self, asset_id: str) -> MediaAsset:
         with self._lock:
             asset = self._assets.get(asset_id)
@@ -1374,10 +1613,18 @@ class MediaStore:
         if math.isclose(options.speed, 1, rel_tol=0, abs_tol=1e-9):
             return source
         with self._lock:
-            output = self.export_dir / f"gifmaker-athome-speed-{uuid.uuid4().hex[:10]}.mp4"
+            output = self.working_dir / f"gifmaker-athome-speed-{uuid.uuid4().hex[:10]}.mp4"
             adjust_video_speed(source, output, options)
             source_stem = Path(source.name).stem.strip() or "video"
             return self.register(output, f"{source_stem}-{_num(options.speed)}x.mp4")
+
+    def create_session_cut(self, source: MediaAsset, options: VideoCutOptions) -> MediaAsset:
+        options.validate(source)
+        with self._lock:
+            output = self.working_dir / f"{uuid.uuid4().hex}-session-cut.mp4"
+            cut_video_for_session(source, output, options)
+            source_stem = Path(source.name).stem.strip() or "video"
+            return self.register(output, f"{source_stem}-session-cut.mp4")
 
     def create_frame_sequence(self, source: MediaAsset, options: ExportOptions) -> FrameSequence:
         with self._lock:
@@ -1436,7 +1683,7 @@ class MediaStore:
                 hold = int(raw_hold)
                 if float(raw_hold) != hold:
                     raise ValueError
-            except (TypeError, ValueError) as exc:
+            except (OverflowError, TypeError, ValueError) as exc:
                 raise MediaError("Each frame hold must be a whole number.") from exc
             if not 1 <= hold <= 300:
                 raise MediaError("Each frame hold must be between 1 and 300 ticks.")
@@ -1514,7 +1761,7 @@ class MediaStore:
             ]
             result = _run_ffmpeg(command, 600)
             if result.returncode != 0 or not output.exists():
-                detail = (result.stderr or "Unknown FFmpeg error").strip().splitlines()[-1]
+                detail = _ffmpeg_error_detail(result.stderr)
                 raise MediaError(f"A browser preview could not be created: {detail[:400]}")
             self._previews[source.id] = output
             return output
@@ -1712,27 +1959,28 @@ def _download_with_ytdlp(
                 detail="Preparing the downloaded media…",
             )
 
-    options: _Params = {
-        # Prefer H.264 when the source offers it because every supported desktop
-        # browser can decode it. Higher-ranked HEVC/AV1 variants remain valid
-        # fallbacks and are transcoded lazily for the in-browser preview.
-        "format": (
-            "bestvideo[ext=mp4][vcodec^=avc]/bestvideo[ext=mp4][vcodec^=h264]/"
-            "best[ext=mp4][vcodec^=avc]/best[ext=mp4][vcodec^=h264]/"
-            "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
-        ),
-        "outtmpl": template,
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "socket_timeout": 30,
-        "retries": 3,
-        "fragment_retries": 3,
-        "ffmpeg_location": str(Path(ffmpeg_executable()).parent),
-        "progress_hooks": [report_ytdlp_progress],
-    }
     try:
-        with YoutubeDL(options) as downloader:
+        # Passing the options directly lets the installed stubs validate them
+        # without importing a private type whose name can change between releases.
+        with YoutubeDL(
+            {
+                # Prefer H.264 for native browser playback; other codecs use a preview.
+                "format": (
+                    "bestvideo[ext=mp4][vcodec^=avc]/bestvideo[ext=mp4][vcodec^=h264]/"
+                    "best[ext=mp4][vcodec^=avc]/best[ext=mp4][vcodec^=h264]/"
+                    "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
+                ),
+                "outtmpl": template,
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 30,
+                "retries": 3,
+                "fragment_retries": 3,
+                "ffmpeg_location": str(Path(ffmpeg_executable()).parent),
+                "progress_hooks": [report_ytdlp_progress],
+            }
+        ) as downloader:
             info = downloader.extract_info(url, download=True)
             if info is None:
                 raise MediaError("No downloadable media was found at that link.")

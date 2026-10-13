@@ -29,13 +29,13 @@
     <section class="hero" id="heroSection">
       <div class="eyebrow"><span>Private by default</span><i></i><span>Frame-precise</span></div>
       <h1>Turn any moment into<br><em>a great loop.</em></h1>
-      <p>Upload a video or image, or paste a video link, then crop and export—all from your own computer.</p>
+      <p>Open a local video or image, or paste a video link, then crop and export—all from your own computer.</p>
     </section>
 
     <section class="import-panel" id="importPanel" aria-labelledby="importTitle">
       <div class="source-tabs" role="tablist" aria-label="Import source">
         <button class="source-tab active" data-tab="file" role="tab" aria-selected="true">
-          <span class="tab-icon">↑</span> Upload a file
+          <span class="tab-icon">↑</span> Open local file
         </button>
         <button class="source-tab" data-tab="link" role="tab" aria-selected="false">
           <span class="tab-icon">↗</span> Paste a link
@@ -43,13 +43,19 @@
       </div>
 
       <div class="tab-content active" id="fileTab" role="tabpanel">
-        <input id="fileInput" type="file" accept="video/*,image/*" hidden>
         <button class="drop-zone" id="dropZone" type="button">
           <span class="upload-orbit"><span class="upload-arrow">↑</span></span>
-          <strong>Drop a video or image here</strong>
-          <span>or click to browse your files</span>
-          <small>MP4, MOV, WebM, MKV, AVI, GIF, WebP, PNG, JPG, and BMP</small>
+          <strong>Open a video or image from this computer</strong>
+          <span>Click to choose the file from its current location</span>
+          <small>Nothing is copied · MP4, MOV, WebM, MKV, AVI, GIF, WebP, PNG, JPG, and BMP</small>
         </button>
+        <label class="oversized-upload-option">
+          <input id="optimizeOversizedUpload" type="checkbox">
+          <span>
+            <strong>Optimize local videos over 16 GiB</strong>
+            <small>Creates a compressed working copy within 1920 × 1080 while leaving the original untouched.</small>
+          </span>
+        </label>
       </div>
 
       <div class="tab-content" id="linkTab" role="tabpanel" hidden>
@@ -199,6 +205,13 @@
             </div>
             <div class="range-labels"><span>0:00</span><span id="totalDurationLabel">0:00</span></div>
             <p class="mode-hint" id="modeHint">Only the selected interval becomes the animation.</p>
+            <div class="frame-editor-launch session-cut-control" id="sessionCutControl" hidden>
+              <div>
+                <strong>Use this cut for the session</strong>
+                <span>Build a shorter working video once so later exports process only these frames.</span>
+              </div>
+              <button type="button" class="ghost-button" id="applySessionCutButton">Apply session cut</button>
+            </div>
             <div class="frame-editor-launch">
               <div>
                 <strong>Edit every frame</strong>
