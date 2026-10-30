@@ -11,7 +11,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 MINIMUM_RUNTIME_VERSIONS = {
-    "pillow": Version("12.3"),
+    "pillow": Version("13.0"),
 }
 _FLOOR_OPERATORS = {">=", ">", "~=", "==", "==="}
 

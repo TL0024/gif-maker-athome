@@ -32,7 +32,7 @@ Then run the tests:
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-The local gate checks dependency consistency and minimum versions, known dependency advisories, Python security patterns, syntax and formatting, lint and import rules, strict typing, and GitHub Actions security. CI additionally runs PSScriptAnalyzer, dependency review, CodeQL for Python and JavaScript, both supported test versions, and a clean Windows executable build. See [docs/CI.md](docs/CI.md) for the complete check list.
+The local gate checks dependency consistency and minimum versions, known dependency advisories, Python security patterns, syntax and formatting, lint and import rules, strict typing, and GitHub Actions security. CI additionally runs PSScriptAnalyzer, dependency review, pull-request CodeQL for Python and JavaScript, Python 3.11, 3.13, and 3.14, and a clean Windows executable build. See [docs/CI.md](docs/CI.md) for the complete check list.
 
 Create changes on a topic branch and open a pull request against `main`. The protected branch requires the current branch to be up to date, all required checks to pass, and all review conversations to be resolved. Do not bypass a failed gate to publish a release.
 

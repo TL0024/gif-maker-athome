@@ -4,6 +4,10 @@ All notable changes to GIFmakerAthome are documented here. Releases follow seman
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-31
+
+- Upgrade Pillow to 13.0 to satisfy the existing release dependency-security gate.
+
 ### Added
 
 - Native local-file selection that opens media from its existing path without copying it into the import cache.
@@ -11,6 +15,9 @@ All notable changes to GIFmakerAthome are documented here. Releases follow seman
 - Opt-in compression and 1080p downscaling for local videos over 16 GiB while preserving the original file.
 
 ### Changed
+
+- Verify Python 3.14 support, add it to the test matrix, and use it for Windows release builds.
+- Limit CodeQL to pull requests targeting main; remove scheduled and push-triggered scans.
 
 - Raised the legacy multipart-upload limit from 4 GiB to 16 GiB; native local selection does not send file bytes through that route.
 
@@ -66,7 +73,8 @@ All notable changes to GIFmakerAthome are documented here. Releases follow seman
 
 - Initial public release with local file and URL imports, crop and time editing, GIF/animated WebP/VP9 WebM export, size targeting, frame editing, complete-loop generation, and a packaged Windows executable.
 
-[Unreleased]: https://github.com/TL0024/gif-maker-athome/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/TL0024/gif-maker-athome/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/TL0024/gif-maker-athome/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/TL0024/gif-maker-athome/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/TL0024/gif-maker-athome/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/TL0024/gif-maker-athome/releases/tag/v1.0.0
