@@ -10,10 +10,10 @@ Pull requests and `main` pushes run two GitHub Actions workflows. Scheduled runs
 | Dependency and security analysis | `pip-audit --strict` for runtime advisories and Bandit for insecure Python patterns. |
 | GitHub Actions security analysis | Zizmor in pedantic mode over every workflow. |
 | PowerShell static analysis | PSScriptAnalyzer warnings and errors, except intentional `Write-Host` status output. |
-| Tests (Python 3.11/3.13) | The complete automated suite on the oldest documented runtime and a current runtime. |
+| Tests (Python 3.11/3.13/3.14) | The complete automated suite on the oldest documented runtime and a current runtime. |
 | Windows executable build | A clean PyInstaller build followed by artifact upload and SHA-256 reporting. |
 | Dependency review | Pull-request dependency changes must not introduce a known moderate-or-higher vulnerability. |
-| CodeQL (Python/JavaScript) | GitHub's security-and-quality query suite over backend and browser code. |
+| CodeQL (Python/JavaScript) | GitHub's security-and-quality query suite over backend and browser code, only on pull requests targeting main. |
 
 The local `security-check.ps1` command mirrors all portable Python and workflow checks. PSScriptAnalyzer, dependency review, CodeQL, and the clean hosted Windows build remain CI checks because they depend on runner or GitHub services.
 

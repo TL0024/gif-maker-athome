@@ -26,7 +26,7 @@ Each release also includes `SHA256SUMS.txt`. To verify the download in PowerShel
 
 ### Run from source
 
-1. Install Python 3.11 or newer.
+1. Install Python 3.11 or newer. Python 3.14 is supported and used for Windows releases.
 2. Double-click `install.bat` once. This creates `.venv` and installs the required packages, including a bundled FFmpeg executable.
 3. Double-click `start.bat`.
 4. Keep the app tab open while editing. Closing the last GIFmakerAthome tab stops the local server and closes the command window. A browser refresh is safe because the server allows the refreshed page to reconnect before shutting down.
@@ -147,7 +147,7 @@ The command is the same quality gate used by release builds and CI. It must comp
 - Strict mypy analysis of the application and scripts.
 - Zizmor's pedantic GitHub Actions audit.
 
-GitHub Actions separates those checks into independently enforceable jobs and adds PSScriptAnalyzer, pull-request dependency review, CodeQL analysis for Python and JavaScript, tests on Python 3.11 and 3.13, and a clean PyInstaller build. Third-party actions are pinned to immutable commits, ordinary workflows have read-only repository access, checkout credentials are not persisted, and every job has a time limit. Dependabot proposes grouped Python and Actions updates each week.
+GitHub Actions separates those checks into independently enforceable jobs and adds PSScriptAnalyzer, pull-request dependency review, pull-request CodeQL analysis for Python and JavaScript, tests on Python 3.11, 3.13, and 3.14, and a clean PyInstaller build. Third-party actions are pinned to immutable commits, ordinary workflows have read-only repository access, checkout credentials are not persisted, and every job has a time limit. Dependabot proposes grouped Python and Actions updates each week.
 
 The `main` branch requires pull requests and successful quality checks. See [CHANGELOG.md](CHANGELOG.md) for release notes, [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design, [docs/CI.md](docs/CI.md) for every automated gate, [docs/RELEASING.md](docs/RELEASING.md) for the release process, [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) for dependency credits, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
